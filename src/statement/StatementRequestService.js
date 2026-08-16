@@ -9,6 +9,7 @@ import {
 } from './StatementRequestInterpreter.js';
 import PendingStatement from '../models/PendingStatement.js';
 import * as defaultDraftRepository from '../services/draft/DraftRepository.js';
+import { card } from '../utils/waFormat.js';
 
 // Fix #1 (requested follow-up to Phase 6.1): previously every branch below
 // purged ANY pending draft unconditionally, even a fully-formed one just
@@ -78,7 +79,7 @@ export function createStatementRequestService(deps = {}) {
       if (freshInterpretation.propertyStatus === 'ambiguous' && freshInterpretation.propertyCandidates?.length > 1) {
         const names = freshInterpretation.propertyCandidates.map((p) => p.name).join(' or ');
         return {
-          replyText: `Which property did you mean: ${names}?`,
+          replyText: card('⚠️', 'Which Property?', [`Did you mean: ${names}?`]),
           status: 'clarification',
         };
       }
@@ -186,7 +187,7 @@ export function createStatementRequestService(deps = {}) {
     // instead of leaving the user with silence until the PDF lands.
     await sendInterimMessage(
       fromNumber,
-      `Got it — generating the ${periodLabel} statement for ${property.name}. I'll send it shortly.`,
+      card('⏳', 'Generating Statement', [`${periodLabel} statement for ${property.name}`], "I'll send it shortly."),
     ).catch(() => {});
 
     let pdfPath = null;
@@ -219,14 +220,13 @@ export function createStatementRequestService(deps = {}) {
 
       if (!delivery.success) {
         return {
-          replyText:
-            'I generated the statement but could not send the PDF. Please try again in a moment.',
+          replyText: card('⚠️', 'Delivery Failed', ['I generated the statement but could not send the PDF.'], 'Please try again in a moment.'),
           status: 'delivery_failed',
         };
       }
 
       return {
-        replyText: `Your ${periodLabel} statement has been generated and sent.`,
+        replyText: card('✅', 'Statement Sent', [`${periodLabel} statement for ${property.name}`]),
         status: 'sent',
         statementSummary: generated.statementSummary,
       };
@@ -239,7 +239,7 @@ export function createStatementRequestService(deps = {}) {
       const message = err instanceof Error ? err.message : String(err);
       if (/property not found/i.test(message)) {
         return {
-          replyText: `I could not find the property "${property?.name || 'unknown'}". Please check the name and try again.`,
+          replyText: card('⚠️', 'Property Not Found', [`I could not find the property "${property?.name || 'unknown'}".`], 'Please check the name and try again.'),
           status: 'property_not_found',
         };
       }

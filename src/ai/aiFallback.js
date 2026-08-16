@@ -2,7 +2,7 @@
  * Shared fallback when Gemini / AI Studio is unavailable (429, 404, etc.).
  */
 export const AI_BUSY_FALLBACK_MESSAGE =
-  "The assistant is busy right now. I can still help if you resend the message in a moment.";
+  "⚠️ *Assistant Busy*\n\nI'm briefly overloaded and couldn't process that.\n\n_Please resend your message in a moment._";
 
 export const AI_UNAVAILABLE_CODES = Object.freeze([
   'AI_RATE_LIMIT',

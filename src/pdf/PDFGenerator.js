@@ -105,6 +105,18 @@ function trackedText(doc, text, x, y, opts = {}) {
   doc.text(text, x, y, { characterSpacing: 1.1, ...opts });
 }
 
+/**
+ * Remaining vertical space on the current page before the bottom margin,
+ * from a given y. Pass this as the `height` option on any `.text()` call
+ * that could conceivably wrap — it stops PDFKit from silently paginating
+ * on its own if our pre-measured estimate ever comes out a hair short of
+ * the real rendered height. See the matching note in tableRenderer.js for
+ * why that silent auto-pagination is what produces trailing blank pages.
+ */
+function remainingHeight(doc, y) {
+  return Math.max(0, doc.page.height - MARGIN_BOTTOM - y);
+}
+
 // --- Header -----------------------------------------------------------------
 
 function renderExecutiveHeader(doc, statement) {
@@ -117,6 +129,8 @@ function renderExecutiveHeader(doc, statement) {
     .text(statement.header.brandName, PAGE_MARGIN_X, 34, {
       characterSpacing: 0.6,
       width: contentWidth(doc),
+      height: remainingHeight(doc, 34),
+      ellipsis: true,
     });
 
   doc
@@ -127,6 +141,7 @@ function renderExecutiveHeader(doc, statement) {
       `${statement.header.propertyName}   |   ${statement.header.reportingPeriod}`,
       PAGE_MARGIN_X,
       60,
+      { width: contentWidth(doc), height: remainingHeight(doc, 60), ellipsis: true },
     );
 
   let y = HEADER_HEIGHT + 22;
@@ -139,7 +154,7 @@ function renderExecutiveHeader(doc, statement) {
       `GENERATED ${statement.header.generatedAt.toUpperCase()}   ·   CURRENCY ${statement.header.currency}`,
       PAGE_MARGIN_X,
       y,
-      { characterSpacing: 0.4 },
+      { characterSpacing: 0.4, width: contentWidth(doc), height: remainingHeight(doc, y), ellipsis: true },
     );
 
   y += 26;
@@ -192,13 +207,13 @@ function renderKPISummary(doc, statement, startY) {
     const innerWidth = colWidth - 20;
 
     doc.fillColor(SLATE).font(FONT_B).fontSize(7.5);
-    trackedText(doc, cell.label, innerX, labelY, { width: innerWidth });
+    trackedText(doc, cell.label, innerX, labelY, { width: innerWidth, height: remainingHeight(doc, labelY), ellipsis: true });
 
     doc
       .fillColor(INK)
       .font(FONT_B)
       .fontSize(cell.big ? 18 : 15)
-      .text(cell.value, innerX, valueY, { width: innerWidth });
+      .text(cell.value, innerX, valueY, { width: innerWidth, height: remainingHeight(doc, valueY), ellipsis: true });
   });
 
   doc
@@ -225,7 +240,11 @@ function renderExpenseBreakdown(doc, statement, startY) {
   y += 20;
 
   if (breakdown.length === 0) {
-    doc.fillColor(SLATE).font(FONT).fontSize(10).text('No expenses recorded.', PAGE_MARGIN_X, y);
+    doc
+      .fillColor(SLATE)
+      .font(FONT)
+      .fontSize(10)
+      .text('No expenses recorded.', PAGE_MARGIN_X, y, { width, height: remainingHeight(doc, y), ellipsis: true });
     return y + 30;
   }
 
@@ -262,6 +281,8 @@ function renderExpenseBreakdown(doc, statement, startY) {
       .text(row.totalFormatted, PAGE_MARGIN_X + width - amountColWidth, labelBaseline, {
         width: amountColWidth,
         align: 'right',
+        height: remainingHeight(doc, labelBaseline),
+        lineBreak: false,
       });
 
     const amountTextWidth = doc.widthOfString(row.totalFormatted);
@@ -287,7 +308,7 @@ function renderExpenseBreakdown(doc, statement, startY) {
   doc.moveTo(PAGE_MARGIN_X, y).lineTo(PAGE_MARGIN_X + width, y).lineWidth(1).strokeColor(HAIRLINE_STRONG).stroke();
   y += 8;
 
-  doc.fillColor(INK).font(FONT_B).fontSize(10).text('TOTAL EXPENSES', PAGE_MARGIN_X, y);
+  doc.fillColor(INK).font(FONT_B).fontSize(10).text('TOTAL EXPENSES', PAGE_MARGIN_X, y, { lineBreak: false });
   doc
     .fillColor(INK)
     .font(FONT_B)
@@ -295,6 +316,7 @@ function renderExpenseBreakdown(doc, statement, startY) {
     .text(statement.summary.totalExpensesFormatted, PAGE_MARGIN_X + width - amountColWidth, y, {
       width: amountColWidth,
       align: 'right',
+      lineBreak: false,
     });
 
   return y + 34;
@@ -313,7 +335,11 @@ function renderTransactionTable(doc, statement, startY) {
   y += 20;
 
   if (transactions.length === 0) {
-    doc.fillColor(SLATE).font(FONT).fontSize(10).text('No transactions in this period.', PAGE_MARGIN_X, y);
+    doc
+      .fillColor(SLATE)
+      .font(FONT)
+      .fontSize(10)
+      .text('No transactions in this period.', PAGE_MARGIN_X, y, { width, height: remainingHeight(doc, y), ellipsis: true });
     return;
   }
 
@@ -379,12 +405,23 @@ function renderFooter(doc, statement) {
         width: contentWidth(doc) * 0.7,
         align: 'left',
         characterSpacing: 0.3,
+        // Footer sits only ~34pt above the physical page edge — deep inside
+        // the bottom margin PDFKit itself would normally refuse to draw
+        // into. If this text ever wrapped to a second line here, PDFKit's
+        // own pagination would silently insert a brand-new (empty) page
+        // right in the middle of this loop. lineBreak:false plus a tight
+        // height bound guarantees it never wraps, so it never can.
+        lineBreak: false,
+        height: doc.page.height - y,
+        ellipsis: true,
       });
 
     doc.text(`PAGE ${i + 1} OF ${range.count}`, PAGE_MARGIN_X, y, {
       width: contentWidth(doc),
       align: 'right',
       characterSpacing: 0.3,
+      lineBreak: false,
+      height: doc.page.height - y,
     });
   }
 }

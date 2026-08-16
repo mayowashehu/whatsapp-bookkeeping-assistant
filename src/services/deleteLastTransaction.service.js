@@ -1,6 +1,7 @@
 import Entry from '../models/Entry.js';
 import PendingDeletion from '../models/PendingDeletion.js';
 import { formatNaira } from '../utils/currencyFormatter.js';
+import { card } from '../utils/waFormat.js';
 
 function formatDate(value) {
   if (!value) return '';
@@ -21,7 +22,7 @@ function buildPreview(entry) {
   const propertyName = entry.property?.name || entry.propertyName || 'Unknown property';
   const date = formatDate(entry.transactionDate || entry.confirmedAt);
 
-  return `${typeLabel} ${amount} for ${propertyName}${date ? ` on ${date}` : ''}`;
+  return `${typeLabel} *${amount}* for *${propertyName}*${date ? ` on ${date}` : ''}`;
 }
 
 function createDefaultRepositories() {
@@ -78,7 +79,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
     if (!latestEntry) {
       return {
         state: 'NO_LAST_TRANSACTION',
-        replyText: 'I could not find a confirmed transaction to delete.',
+        replyText: card('⚠️', 'Nothing to Delete', ['I could not find a confirmed transaction to delete.']),
         pendingDeletion: null,
         entry: null,
       };
@@ -101,7 +102,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
 
     return {
       state: 'AWAITING_DELETION_CONFIRMATION',
-      replyText: `I found your most recent transaction: ${preview}. Reply YES to delete it, or NO to cancel.`,
+      replyText: card('🗑️', 'Delete Last Transaction?', [`Most recent: ${preview}`], 'Reply YES to delete it, or NO to cancel.'),
       pendingDeletion: {
         fromNumber,
         senderId,
@@ -126,7 +127,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
     if (!pendingDeletion) {
       return {
         state: 'NO_LAST_TRANSACTION',
-        replyText: 'I do not have a pending deletion request to confirm.',
+        replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending deletion request to confirm.']),
         pendingDeletion: null,
         entry: null,
       };
@@ -137,7 +138,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
 
     return {
       state: 'DELETED',
-      replyText: `Deleted the most recent transaction${entry ? ' successfully' : ''}.`,
+      replyText: card('🗑️', 'Deleted', [`The most recent transaction was deleted${entry ? ' successfully' : ''}.`]),
       pendingDeletion: null,
       entry,
     };
@@ -150,7 +151,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
     if (!pendingDeletion) {
       return {
         state: 'NO_LAST_TRANSACTION',
-        replyText: 'I do not have a pending deletion request to cancel.',
+        replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending deletion request to cancel.']),
         pendingDeletion: null,
         entry: null,
       };
@@ -160,7 +161,7 @@ export function createDeleteLastTransactionService({ entryRepository, pendingDel
 
     return {
       state: 'CANCELLED',
-      replyText: 'I have not deleted anything.',
+      replyText: card('🚫', 'Cancelled', ['Nothing was deleted.']),
       pendingDeletion: null,
       entry: null,
     };

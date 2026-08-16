@@ -1,7 +1,8 @@
 import PendingDraft from '../../models/PendingDraft.js';
 import { sendWhatsAppText } from '../../whatsapp/services/whatsappSend.service.js';
-import { toDraftView, formatConfirmationMessage, formatClarificationMessage } from './DraftFormatter.js';
+import { toDraftView, formatConfirmationMessage } from './DraftFormatter.js';
 import { withSenderLock } from '../../utils/concurrencyLocks.js';
+import { card } from '../../utils/waFormat.js';
 
 const REMINDER_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -45,13 +46,14 @@ export async function checkAndRemindStaleDrafts() {
         // actual pending question instead of pretending there's a complete
         // entry to confirm.
         const isAwaitingClarification = Boolean(currentDraft.clarification?.awaiting);
-        const reminderBody = isAwaitingClarification
-          ? `Still waiting on this: ${formatClarificationMessage(currentDraft.clarification.question)}`
-          : formatConfirmationMessage(view);
-        const reminderFooter = isAwaitingClarification
-          ? '\n\nReply with the missing detail, or *CANCEL* to discard.'
-          : '\n\nReply *YES* to save it, or *CANCEL* to discard.';
-        const reminderText = `⏳ *Draft Reminder*\n\nYou have an unconfirmed transaction waiting:\n\n${reminderBody}${reminderFooter}`;
+        const reminderText = isAwaitingClarification
+          ? `⏳ ${'*Draft Reminder*'}\n\nYou still have an unfinished entry — I'm waiting on one more detail:\n\n${currentDraft.clarification.question}`
+          : card(
+              '⏳',
+              'Draft Reminder',
+              ['You have an unconfirmed transaction waiting:', '', formatConfirmationMessage(view)],
+              'Reply YES to save it, or CANCEL to discard.',
+            );
 
         await sendWhatsAppText(fromNumber, reminderText);
 

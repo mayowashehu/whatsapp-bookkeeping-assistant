@@ -17,7 +17,7 @@
  */
 
 export const AUDIO_PROCESSING_FALLBACK_MESSAGE =
-  "I couldn't process that audio message. Please try again with a shorter voice note or send the transaction as text.";
+  "⚠️ *Couldn't Process Audio*\n\nI couldn't process that voice message.\n\n_Please try again with a shorter voice note, or send the transaction as text._";
 
 // Failures caused by the audio itself (missing, corrupted, unsupported
 // format, or too long to transcribe in time) or by the download step that

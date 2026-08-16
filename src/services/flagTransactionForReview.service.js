@@ -10,6 +10,7 @@ import {
   narrowCandidatesByText,
 } from './transactionLookup.js';
 import { formatNaira } from '../utils/currencyFormatter.js';
+import { card, bullet } from '../utils/waFormat.js';
 
 // Task 3.2 — "Define a path for editing an already-confirmed transaction."
 //
@@ -91,7 +92,12 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
       const names = propertyResolution.candidates.map((candidate) => candidate.name).join(', ');
       return {
         state: 'AMBIGUOUS_PROPERTY',
-        replyText: `That property name matches more than one property (${names}). Please resend, naming the exact property — for example "Flag the ${amount ? formatNaira(amount) : '20,000'} repairs payment for ${propertyResolution.candidates[0].name} for review."`,
+        replyText: card(
+          '⚠️',
+          'Multiple Properties Match',
+          [`That property name matches more than one: ${names}.`],
+          `Resend naming the exact property — e.g. "Flag the ${amount ? formatNaira(amount) : '20,000'} repairs payment for ${propertyResolution.candidates[0].name} for review."`,
+        ),
         pendingFlag: null,
         entry: null,
       };
@@ -102,8 +108,12 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (amount === null && !propertyId) {
       return {
         state: 'NEEDS_DETAILS',
-        replyText:
-          'To flag a transaction for review, please include the amount and/or property, e.g. "Flag the 20,000 repairs payment for Flat 2 — wrong category."',
+        replyText: card(
+          '🚩',
+          'Need More Detail',
+          ['To flag a transaction for review, include the amount and/or property.'],
+          'e.g. "Flag the 20,000 repairs payment for Flat 2 — wrong category."',
+        ),
         pendingFlag: null,
         entry: null,
       };
@@ -114,8 +124,12 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (matches.length === 0) {
       return {
         state: 'NO_MATCH',
-        replyText:
-          "I couldn't find a confirmed transaction matching that. Double-check the amount and property, or mention roughly when it happened, and try again.",
+        replyText: card(
+          '🔍',
+          'No Match Found',
+          ["I couldn't find a confirmed transaction matching that."],
+          'Double-check the amount and property, or mention roughly when it happened, and try again.',
+        ),
         pendingFlag: null,
         entry: null,
       };
@@ -124,8 +138,8 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (matches.length > 1) {
       const candidates = buildCandidateList(matches);
       const shown = candidates.slice(0, 5);
-      const lines = shown.map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
-      const moreNote = candidates.length > shown.length ? `\n...and ${candidates.length - shown.length} more.` : '';
+      const lines = shown.map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
+      const moreNote = candidates.length > shown.length ? `\n_...and ${candidates.length - shown.length} more._` : '';
 
       await repositories.pendingFlagRepository.create({
         fromNumber,
@@ -138,7 +152,12 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
       return {
         state: 'AMBIGUOUS_MATCH',
-        replyText: `I found more than one matching transaction:\n${lines}${moreNote}\nWhich one do you mean? Reply with the date, a word from the description, or which one (e.g. "1" or "the first one").`,
+        replyText: card(
+          '🔍',
+          'Multiple Matches',
+          [lines + moreNote],
+          'Which one do you mean? Reply with the date, a word from the description, or which one (e.g. "1" or "the first one").',
+        ),
         pendingFlag: null,
         entry: null,
       };
@@ -158,7 +177,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     return {
       state: 'AWAITING_FLAG_CONFIRMATION',
-      replyText: `I found this transaction: ${preview}. Reply YES to flag it for manual review, or NO to cancel.`,
+      replyText: card('🚩', 'Flag This Transaction?', [preview], 'Reply YES to flag it for manual review, or NO to cancel.'),
       pendingFlag: { fromNumber, senderId, entryId: entry._id, note, entrySnapshot: snapshot },
       entry: null,
     };
@@ -169,7 +188,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     const pendingFlag = await repositories.pendingFlagRepository.findByFromNumber(fromNumber);
     if (!pendingFlag || pendingFlag.entryId) {
-      return { state: 'NO_PENDING_FLAG', replyText: 'I do not have a pending flag request to narrow down.', pendingFlag: null, entry: null };
+      return { state: 'NO_PENDING_FLAG', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag request to narrow down.']), pendingFlag: null, entry: null };
     }
 
     const { matched, candidates } = narrowCandidatesByText(pendingFlag.candidates, text);
@@ -178,7 +197,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
       await repositories.pendingFlagRepository.updateCandidates(fromNumber, { entryId: matched.entryId, candidates: [] });
       return {
         state: 'AWAITING_FLAG_CONFIRMATION',
-        replyText: `Got it: ${buildCandidatePreview(matched)}. Reply YES to flag it for manual review, or NO to cancel.`,
+        replyText: card('🚩', 'Flag This Transaction?', [buildCandidatePreview(matched)], 'Reply YES to flag it for manual review, or NO to cancel.'),
         pendingFlag: null,
         entry: null,
       };
@@ -186,10 +205,10 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     if (candidates.length !== pendingFlag.candidates.length) {
       await repositories.pendingFlagRepository.updateCandidates(fromNumber, { candidates });
-      const lines = candidates.slice(0, 5).map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
+      const lines = candidates.slice(0, 5).map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
       return {
         state: 'AMBIGUOUS_MATCH',
-        replyText: `Narrowed it down, but still more than one:\n${lines}\nWhich one do you mean?`,
+        replyText: card('🔍', 'Narrowed Down', [lines], 'Still more than one — which one do you mean?'),
         pendingFlag: null,
         entry: null,
       };
@@ -197,7 +216,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     return {
       state: 'AMBIGUOUS_MATCH',
-      replyText: 'I still couldn\'t tell which one you mean. Try the date, a word from the description, or say "1", "2", etc.',
+      replyText: card('🔍', 'Still Not Sure', ['I couldn\u2019t tell which one you mean.'], 'Try the date, a word from the description, or say "1", "2", etc.'),
       pendingFlag: null,
       entry: null,
     };
@@ -211,7 +230,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (!pendingFlag) {
       return {
         state: 'NO_PENDING_FLAG',
-        replyText: 'I do not have a pending flag request to confirm.',
+        replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag request to confirm.']),
         pendingFlag: null,
         entry: null,
       };
@@ -219,7 +238,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (!pendingFlag.entryId) {
       return {
         state: 'NEEDS_SELECTION',
-        replyText: 'Which transaction do you mean? Reply with the date, a word from the description, or which one.',
+        replyText: card('🔍', 'Which One?', ['Reply with the date, a word from the description, or which one.']),
         pendingFlag: null,
         entry: null,
       };
@@ -232,7 +251,12 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     return {
       state: 'FLAGGED',
-      replyText: `Flagged for manual review${entry ? `: ${buildTransactionPreview(entry)}` : ''}. It still counts exactly as before in your totals and statements — say "show my flagged transactions" any time to find it again, or "edit ..." to fix it now.`,
+      replyText: card(
+        '🚩',
+        'Flagged for Review',
+        entry ? [buildTransactionPreview(entry)] : [],
+        'It still counts exactly as before in your totals and statements. Say "show my flagged transactions" any time to find it again, or "edit ..." to fix it now.',
+      ),
       pendingFlag: null,
       entry,
     };
@@ -245,7 +269,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
     if (!pendingFlag) {
       return {
         state: 'NO_PENDING_FLAG',
-        replyText: 'I do not have a pending flag request to cancel.',
+        replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag request to cancel.']),
         pendingFlag: null,
         entry: null,
       };
@@ -255,7 +279,7 @@ export function createFlagTransactionForReviewService({ entryRepository, pending
 
     return {
       state: 'CANCELLED',
-      replyText: 'I have not flagged anything.',
+      replyText: card('🚫', 'Cancelled', ['Nothing was flagged.']),
       pendingFlag: null,
       entry: null,
     };

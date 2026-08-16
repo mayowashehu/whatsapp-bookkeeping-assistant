@@ -9,6 +9,7 @@ import {
   buildCandidatePreview,
   narrowCandidatesByText,
 } from './transactionLookup.js';
+import { card, bullet } from '../utils/waFormat.js';
 
 // Task 3.3 — the "I checked it, it's fine" half of the flag flow from 3.2.
 // Not every flagged transaction needs an edit — sometimes a second look
@@ -69,7 +70,7 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
       const names = propertyResolution.candidates.map((candidate) => candidate.name).join(', ');
       return {
         state: 'AMBIGUOUS_PROPERTY',
-        replyText: `That property name matches more than one property (${names}). Please resend, naming the exact property.`,
+        replyText: card('⚠️', 'Multiple Properties Match', [`That property name matches more than one: ${names}.`], 'Resend naming the exact property.'),
         entry: null,
       };
     }
@@ -86,7 +87,7 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
       }
       return {
         state: 'NEEDS_DETAILS',
-        replyText: 'To clear a flag, please include the amount and/or property, e.g. "Clear the flag on the 20,000 repairs payment for Flat 2."',
+        replyText: card('🚩', 'Need More Detail', ['To clear a flag, include the amount and/or property.'], 'e.g. "Clear the flag on the 20,000 repairs payment for Flat 2."'),
         entry: null,
       };
     }
@@ -96,8 +97,7 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
     if (matches.length === 0) {
       return {
         state: 'NO_MATCH',
-        replyText:
-          "I couldn't find a flagged transaction matching that. Say \"show my flagged transactions\" to see what's currently flagged.",
+        replyText: card('🔍', 'No Match Found', ["I couldn't find a flagged transaction matching that."], 'Say "show my flagged transactions" to see what\u2019s currently flagged.'),
         entry: null,
       };
     }
@@ -114,7 +114,7 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
 
     const pendingClear = await repositories.pendingClearRepository.findByFromNumber(fromNumber);
     if (!pendingClear || pendingClear.entryId) {
-      return { state: 'NO_PENDING_CLEAR', replyText: 'I do not have a pending flag-clear request to narrow down.', entry: null };
+      return { state: 'NO_PENDING_CLEAR', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag-clear request to narrow down.']), entry: null };
     }
 
     const { matched, candidates } = narrowCandidatesByText(pendingClear.candidates, text);
@@ -123,20 +123,20 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
       await repositories.pendingClearRepository.updateCandidates(fromNumber, { entryId: matched.entryId, candidates: [] });
       return {
         state: 'AWAITING_CLEAR_CONFIRMATION',
-        replyText: `Got it: ${buildCandidatePreview(matched)}. Reply YES to clear the flag, or NO to leave it flagged.`,
+        replyText: card('🚩', 'Clear This Flag?', [buildCandidatePreview(matched)], 'Reply YES to clear the flag, or NO to leave it flagged.'),
         entry: null,
       };
     }
 
     if (candidates.length !== pendingClear.candidates.length) {
       await repositories.pendingClearRepository.updateCandidates(fromNumber, { candidates });
-      const lines = candidates.slice(0, 5).map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
-      return { state: 'AMBIGUOUS_MATCH', replyText: `Narrowed it down, but still more than one:\n${lines}\nWhich one do you mean?`, entry: null };
+      const lines = candidates.slice(0, 5).map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
+      return { state: 'AMBIGUOUS_MATCH', replyText: card('🔍', 'Narrowed Down', [lines], 'Still more than one — which one do you mean?'), entry: null };
     }
 
     return {
       state: 'AMBIGUOUS_MATCH',
-      replyText: 'I still couldn\'t tell which one you mean. Try the date, a word from the description, or say "1", "2", etc.',
+      replyText: card('🔍', 'Still Not Sure', ['I couldn\u2019t tell which one you mean.'], 'Try the date, a word from the description, or say "1", "2", etc.'),
       entry: null,
     };
   }
@@ -147,10 +147,10 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
 
     const pendingClear = await repositories.pendingClearRepository.findByFromNumber(fromNumber);
     if (!pendingClear) {
-      return { state: 'NO_PENDING_CLEAR', replyText: 'I do not have a pending flag-clear request to confirm.', entry: null };
+      return { state: 'NO_PENDING_CLEAR', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag-clear request to confirm.']), entry: null };
     }
     if (!pendingClear.entryId) {
-      return { state: 'NEEDS_SELECTION', replyText: 'Which transaction do you mean? Reply with the date, a word from the description, or which one.', entry: null };
+      return { state: 'NEEDS_SELECTION', replyText: card('🔍', 'Which One?', ['Reply with the date, a word from the description, or which one.']), entry: null };
     }
 
     const entry = await repositories.entryRepository.clearFlagById(pendingClear.entryId);
@@ -158,7 +158,7 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
 
     return {
       state: 'CLEARED',
-      replyText: `Cleared the flag${entry ? `: ${buildTransactionPreview(entry)}` : ''}. It's back to a normal confirmed entry.`,
+      replyText: card('✅', 'Flag Cleared', entry ? [buildTransactionPreview(entry)] : [], 'It\u2019s back to a normal confirmed entry.'),
       entry,
     };
   }
@@ -168,11 +168,11 @@ export function createClearFlaggedTransactionService({ entryRepository, pendingC
 
     const pendingClear = await repositories.pendingClearRepository.findByFromNumber(fromNumber);
     if (!pendingClear) {
-      return { state: 'NO_PENDING_CLEAR', replyText: 'I do not have a pending flag-clear request to cancel.', entry: null };
+      return { state: 'NO_PENDING_CLEAR', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending flag-clear request to cancel.']), entry: null };
     }
 
     await repositories.pendingClearRepository.deleteByFromNumber(fromNumber);
-    return { state: 'CANCELLED', replyText: 'Left the flag as it was.', entry: null };
+    return { state: 'CANCELLED', replyText: card('🚫', 'Cancelled', ['Left the flag as it was.']), entry: null };
   }
 
   return { handleClearRequest, handleDisambiguation, handleConfirmation, handleCancellation };
@@ -192,15 +192,15 @@ async function startConfirmation(entry, fromNumber, senderId, repositories) {
 
   return {
     state: 'AWAITING_CLEAR_CONFIRMATION',
-    replyText: `Found this flagged transaction: ${preview}. Reply YES to clear the flag, or NO to leave it flagged.`,
+    replyText: card('🚩', 'Clear This Flag?', [preview], 'Reply YES to clear the flag, or NO to leave it flagged.'),
     entry: null,
   };
 }
 
 async function startDisambiguation(matches, fromNumber, senderId, repositories) {
   const candidates = buildCandidateList(matches);
-  const lines = candidates.slice(0, 5).map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
-  const moreNote = candidates.length > 5 ? `\n...and ${candidates.length - 5} more.` : '';
+  const lines = candidates.slice(0, 5).map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
+  const moreNote = candidates.length > 5 ? `\n_...and ${candidates.length - 5} more._` : '';
 
   await repositories.pendingClearRepository.create({
     fromNumber,
@@ -212,7 +212,7 @@ async function startDisambiguation(matches, fromNumber, senderId, repositories) 
 
   return {
     state: 'AMBIGUOUS_MATCH',
-    replyText: `More than one flagged transaction matches:\n${lines}${moreNote}\nWhich one do you mean? Reply with the date, a word from the description, or which one.`,
+    replyText: card('🔍', 'Multiple Matches', [lines + moreNote], 'Which one do you mean? Reply with the date, a word from the description, or which one.'),
     entry: null,
   };
 }

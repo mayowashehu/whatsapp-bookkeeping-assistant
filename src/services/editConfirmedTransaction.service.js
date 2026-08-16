@@ -13,6 +13,7 @@ import {
   narrowCandidatesByText,
   formatDate,
 } from './transactionLookup.js';
+import { card, row, bullet } from '../utils/waFormat.js';
 
 // Task 3.3 — the actual fix, once a transaction has been located (via
 // flagTransactionForReview.service.js's search, or directly here). Three
@@ -87,7 +88,7 @@ function resolvePatch(rawPatch, snapshot, knownProperties, referenceDate) {
       return { error: `"${rawPatch.type}" isn't income or expense.` };
     }
     resolved.type = type;
-    changes.push(`Type: ${snapshot.type} → ${type}`);
+    changes.push(`*Type:* ${snapshot.type} → ${type}`);
   }
 
   if (rawPatch.amount !== undefined) {
@@ -96,7 +97,7 @@ function resolvePatch(rawPatch, snapshot, knownProperties, referenceDate) {
       return { error: `I couldn't read "${rawPatch.amount}" as an amount.` };
     }
     resolved.amount = amount;
-    changes.push(`Amount: ${formatNaira(snapshot.amount)} → ${formatNaira(amount)}`);
+    changes.push(`*Amount:* ${formatNaira(snapshot.amount)} → ${formatNaira(amount)}`);
   }
 
   if (rawPatch.property !== undefined) {
@@ -109,18 +110,18 @@ function resolvePatch(rawPatch, snapshot, knownProperties, referenceDate) {
       return { error: `I couldn't match "${rawPatch.property}" to one of your properties.${hint}` };
     }
     resolved.property = propertyResolution.property.id;
-    changes.push(`Property: ${snapshot.propertyName} → ${propertyResolution.property.name}`);
+    changes.push(`*Property:* ${snapshot.propertyName} → ${propertyResolution.property.name}`);
   }
 
   if (rawPatch.category !== undefined) {
     const category = String(rawPatch.category).trim();
     resolved.category = category || null;
-    changes.push(`Category: ${snapshot.category || '—'} → ${category || '—'}`);
+    changes.push(`*Category:* ${snapshot.category || '—'} → ${category || '—'}`);
   }
 
   if (rawPatch.description !== undefined) {
     resolved.description = String(rawPatch.description).trim();
-    changes.push(`Description: ${snapshot.description || '—'} → ${resolved.description || '—'}`);
+    changes.push(`*Description:* ${snapshot.description || '—'} → ${resolved.description || '—'}`);
   }
 
   if (rawPatch.transactionDate !== undefined) {
@@ -129,7 +130,7 @@ function resolvePatch(rawPatch, snapshot, knownProperties, referenceDate) {
       return { error: `I couldn't read "${rawPatch.transactionDate}" as a date.` };
     }
     resolved.transactionDate = new Date(`${ymd}T12:00:00.000Z`);
-    changes.push(`Date: ${formatDate(snapshot.transactionDate)} → ${formatDate(resolved.transactionDate)}`);
+    changes.push(`*Date:* ${formatDate(snapshot.transactionDate)} → ${formatDate(resolved.transactionDate)}`);
   }
 
   // A type switch to expense with no category (given here or already on
@@ -166,7 +167,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
       const names = propertyResolution.candidates.map((candidate) => candidate.name).join(', ');
       return {
         state: 'AMBIGUOUS_PROPERTY',
-        replyText: `That property name matches more than one property (${names}). Please resend, naming the exact property.`,
+        replyText: card('⚠️', 'Multiple Properties Match', [`That property name matches more than one: ${names}.`], 'Resend naming the exact property.'),
         entry: null,
       };
     }
@@ -176,8 +177,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
     if (amount === null && !propertyId) {
       return {
         state: 'NEEDS_DETAILS',
-        replyText:
-          'To edit a transaction, please include the amount and/or property, e.g. "Edit the 20,000 repairs payment for Flat 2."',
+        replyText: card('✏️', 'Need More Detail', ['To edit a transaction, include the amount and/or property.'], 'e.g. "Edit the 20,000 repairs payment for Flat 2."'),
         entry: null,
       };
     }
@@ -187,7 +187,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
     if (matches.length === 0) {
       return {
         state: 'NO_MATCH',
-        replyText: "I couldn't find a confirmed transaction matching that. Double-check the amount and property, and try again.",
+        replyText: card('🔍', 'No Match Found', ["I couldn't find a confirmed transaction matching that."], 'Double-check the amount and property, and try again.'),
         entry: null,
       };
     }
@@ -195,8 +195,8 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
     if (matches.length > 1) {
       const candidates = buildCandidateList(matches);
       const shown = candidates.slice(0, 5);
-      const lines = shown.map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
-      const moreNote = candidates.length > shown.length ? `\n...and ${candidates.length - shown.length} more.` : '';
+      const lines = shown.map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
+      const moreNote = candidates.length > shown.length ? `\n_...and ${candidates.length - shown.length} more._` : '';
 
       await repositories.pendingEditRepository.create({
         fromNumber,
@@ -210,7 +210,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
       return {
         state: 'AMBIGUOUS_MATCH',
-        replyText: `I found more than one matching transaction:\n${lines}${moreNote}\nWhich one do you mean? Reply with the date, a word from the description, or which one (e.g. "1" or "the first one").`,
+        replyText: card('🔍', 'Multiple Matches', [lines + moreNote], 'Which one do you mean? Reply with the date, a word from the description, or which one (e.g. "1" or "the first one").'),
         entry: null,
       };
     }
@@ -229,7 +229,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
     return {
       state: 'AWAITING_CHANGES',
-      replyText: `Found it: ${buildTransactionPreview(entry)}. What would you like to change? (amount, property, category, income/expense, date, or description) Or reply CANCEL to stop.`,
+      replyText: card('✏️', 'What Would You Like to Change?', [buildTransactionPreview(entry), '', 'Amount, property, category, income/expense, date, or description.'], 'Reply CANCEL to stop.'),
       entry: null,
     };
   }
@@ -239,7 +239,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
     const pendingEdit = await repositories.pendingEditRepository.findByFromNumber(fromNumber);
     if (!pendingEdit || pendingEdit.stage !== 'AWAITING_SELECTION') {
-      return { state: 'NO_PENDING_EDIT', replyText: 'I do not have a pending edit to narrow down.', entry: null };
+      return { state: 'NO_PENDING_EDIT', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending edit to narrow down.']), entry: null };
     }
 
     const { matched, candidates } = narrowCandidatesByText(pendingEdit.candidates, text);
@@ -255,20 +255,20 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
       });
       return {
         state: 'AWAITING_CHANGES',
-        replyText: `Got it: ${buildCandidatePreview(matched)}. What would you like to change? (amount, property, category, income/expense, date, or description) Or reply CANCEL to stop.`,
+        replyText: card('✏️', 'What Would You Like to Change?', [buildCandidatePreview(matched), '', 'Amount, property, category, income/expense, date, or description.'], 'Reply CANCEL to stop.'),
         entry: null,
       };
     }
 
     if (candidates.length !== pendingEdit.candidates.length) {
       await repositories.pendingEditRepository.updateStage(fromNumber, { candidates });
-      const lines = candidates.slice(0, 5).map((candidate) => `- ${buildCandidatePreview(candidate)}`).join('\n');
-      return { state: 'AMBIGUOUS_MATCH', replyText: `Narrowed it down, but still more than one:\n${lines}\nWhich one do you mean?`, entry: null };
+      const lines = candidates.slice(0, 5).map((candidate) => bullet(buildCandidatePreview(candidate))).join('\n');
+      return { state: 'AMBIGUOUS_MATCH', replyText: card('🔍', 'Narrowed Down', [lines], 'Still more than one — which one do you mean?'), entry: null };
     }
 
     return {
       state: 'AMBIGUOUS_MATCH',
-      replyText: 'I still couldn\'t tell which one you mean. Try the date, a word from the description, or say "1", "2", etc.',
+      replyText: card('🔍', 'Still Not Sure', ['I couldn\u2019t tell which one you mean.'], 'Try the date, a word from the description, or say "1", "2", etc.'),
       entry: null,
     };
   }
@@ -278,10 +278,10 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
     const pendingEdit = await repositories.pendingEditRepository.findByFromNumber(fromNumber);
     if (!pendingEdit) {
-      return { state: 'NO_PENDING_EDIT', replyText: 'I do not have a pending edit to continue.', entry: null };
+      return { state: 'NO_PENDING_EDIT', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending edit to continue.']), entry: null };
     }
     if (pendingEdit.stage === 'AWAITING_SELECTION') {
-      return { state: 'NEEDS_SELECTION', replyText: 'Which transaction do you mean? Reply with the date, a word from the description, or which one.', entry: null };
+      return { state: 'NEEDS_SELECTION', replyText: card('🔍', 'Which One?', ['Reply with the date, a word from the description, or which one.']), entry: null };
     }
 
     const { patch: rawPatch, parseResult: correctionParseResult } = await buildCorrectionPatch(text, {
@@ -300,7 +300,12 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
       const currentSummary = buildTransactionPreview(pendingEdit.entrySnapshot);
       return {
         state: 'AWAITING_CHANGES',
-        replyText: `That sounds like it might be about a different transaction${correctionParseResult.mismatchNote ? ` (${correctionParseResult.mismatchNote})` : ''} than the one you're editing (${currentSummary}). Try again more specifically, or reply CANCEL to stop.`,
+        replyText: card(
+          '🤔',
+          'Different Transaction?',
+          [row('New text', correctionParseResult.mismatchNote || 'looks unrelated to the entry you\u2019re editing'), row('Editing', currentSummary)],
+          'Try again more specifically, or reply CANCEL to stop.',
+        ),
         entry: null,
       };
     }
@@ -310,22 +315,21 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
     if (Object.keys(clean).length === 0) {
       return {
         state: 'AWAITING_CHANGES',
-        replyText:
-          'I couldn\'t tell what to change. Try something like "change the amount to 25,000" or "change the category to maintenance". Or reply CANCEL to stop.',
+        replyText: card('🔍', 'Not Sure What to Change', ['Try something like "change the amount to 25,000" or "change the category to maintenance".'], 'Or reply CANCEL to stop.'),
         entry: null,
       };
     }
 
     const { patch, changes, error } = resolvePatch(clean, pendingEdit.entrySnapshot, knownProperties, referenceDate);
     if (error) {
-      return { state: 'AWAITING_CHANGES', replyText: `${error} Try again, or reply CANCEL to stop.`, entry: null };
+      return { state: 'AWAITING_CHANGES', replyText: card('⚠️', 'Couldn\u2019t Apply That', [error], 'Try again, or reply CANCEL to stop.'), entry: null };
     }
 
     await repositories.pendingEditRepository.updateStage(fromNumber, { stage: 'AWAITING_CONFIRMATION', patch });
 
     return {
       state: 'AWAITING_CONFIRMATION',
-      replyText: `Here's the change:\n${changes.map((line) => `- ${line}`).join('\n')}\nReply YES to save, or NO to cancel.`,
+      replyText: card('✏️', 'Confirm Change', [changes.map(bullet).join('\n')], 'Reply YES to save, or NO to cancel.'),
       entry: null,
     };
   }
@@ -336,7 +340,7 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
     const pendingEdit = await repositories.pendingEditRepository.findByFromNumber(fromNumber);
     if (!pendingEdit || pendingEdit.stage !== 'AWAITING_CONFIRMATION') {
-      return { state: 'NO_PENDING_EDIT', replyText: 'I do not have a pending edit to confirm.', entry: null };
+      return { state: 'NO_PENDING_EDIT', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending edit to confirm.']), entry: null };
     }
 
     const update = {
@@ -354,14 +358,14 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
       return {
         state: 'EDITED',
-        replyText: `Saved${entry ? `: ${buildTransactionPreview(entry)}` : ''}. Your totals and statements now reflect this update.`,
+        replyText: card('✅', 'Saved', entry ? [buildTransactionPreview(entry)] : [], 'Your totals and statements now reflect this update.'),
         entry,
       };
     } catch (err) {
       await repositories.pendingEditRepository.deleteByFromNumber(fromNumber);
       return {
         state: 'EDIT_FAILED',
-        replyText: `I couldn't save that change (${err.message}). Please start the edit again.`,
+        replyText: card('⚠️', 'Save Failed', [err.message], 'Please start the edit again.'),
         entry: null,
       };
     }
@@ -372,11 +376,11 @@ export function createEditConfirmedTransactionService({ entryRepository, pending
 
     const pendingEdit = await repositories.pendingEditRepository.findByFromNumber(fromNumber);
     if (!pendingEdit) {
-      return { state: 'NO_PENDING_EDIT', replyText: 'I do not have a pending edit to cancel.', entry: null };
+      return { state: 'NO_PENDING_EDIT', replyText: card('⚠️', 'Nothing Pending', ['I do not have a pending edit to cancel.']), entry: null };
     }
 
     await repositories.pendingEditRepository.deleteByFromNumber(fromNumber);
-    return { state: 'CANCELLED', replyText: 'No changes made.', entry: null };
+    return { state: 'CANCELLED', replyText: card('🚫', 'Cancelled', ['No changes made.']), entry: null };
   }
 
   return { handleEditRequest, handleDisambiguation, handleChangeRequest, handleConfirmation, handleCancellation };

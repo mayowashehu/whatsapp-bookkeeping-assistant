@@ -6,9 +6,9 @@ import { debounceMessage } from '../../utils/messageDebouncer.js';
 import { checkFastPassIntent } from '../../services/textPreFilter.js';
 import { normalizePhoneNumber } from '../../utils/phoneNormalize.js';
 import { isLocked, withSenderLock } from '../../utils/concurrencyLocks.js';
+import { card } from '../../utils/waFormat.js';
 
-const STILL_PROCESSING_REPLY =
-  "I'm still processing your previous message. Please wait a moment.";
+const STILL_PROCESSING_REPLY = card('⏳', 'Still Processing', ["I'm still processing your previous message."], 'Please wait a moment.');
 
 /**
  * A message that is a complete, decisive turn on its own — "yes", "cancel",

@@ -5,6 +5,7 @@ import { markMessageProcessed } from '../../services/MessageIdService.js';
 import { markMessageAsRead, sendWhatsAppText } from './whatsappSend.service.js';
 import { acquireLock } from '../../utils/concurrencyLocks.js';
 import { normalizePhoneNumber } from '../../utils/phoneNormalize.js'; // VULNERABILITY FIX: Import canonical normalizer
+import { card } from '../../utils/waFormat.js';
 
 // BUG FIX (live, confirmed): Meta's WhatsApp typing indicator auto-expires
 // after 25 seconds — it is NOT a toggle that stays on until you explicitly
@@ -130,7 +131,7 @@ export async function processMessagePipeline(message, fullPayload) {
     try {
       await sendWhatsAppText(
         phoneNumber,
-        'A system error occurred while generating the document. Please verify your inputs and try again.',
+        card('⚠️', 'System Error', ['A system error occurred while generating the document.'], 'Please verify your inputs and try again.'),
       );
     } catch (fallbackErr) {
       console.error('[PIPELINE FATAL] Fallback text send also failed:', fallbackErr);

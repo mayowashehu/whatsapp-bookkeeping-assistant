@@ -12,7 +12,7 @@
  */
 
 export const RECEIPT_PROCESSING_FALLBACK_MESSAGE =
-  "I couldn't process that photo. Please try again with a clearer photo, or send the transaction as text.";
+  "⚠️ *Couldn't Process Photo*\n\nI couldn't process that photo.\n\n_Please try again with a clearer photo, or send the transaction as text._";
 
 // Distinct from the generic fallback above: this is the "I read the photo
 // fine, but I'm not confident enough about the amount to draft anything"
@@ -20,7 +20,7 @@ export const RECEIPT_PROCESSING_FALLBACK_MESSAGE =
 // GeminiReceiptService.js), not a technical failure. Never silently guesses
 // an amount here; asks the user to confirm one instead.
 export const RECEIPT_UNREADABLE_MESSAGE =
-  'I couldn\'t confidently read an amount off that photo — it might be blurry, cropped, or not a receipt. Please try a clearer photo, or type the transaction instead (e.g. *Paid 15,000 for diesel at Flat 2*).';
+  '📸 *Couldn\'t Read That Receipt*\n\nI couldn\u2019t confidently read an amount off that photo — it might be blurry, cropped, or not a receipt.\n\n_Try a clearer photo, or type the transaction instead — e.g. *Paid 15,000 for diesel at Flat 2*._';
 
 // Failures caused by the photo itself (missing, corrupted, unsupported
 // format) or by the download step that feeds it. Retrying the identical

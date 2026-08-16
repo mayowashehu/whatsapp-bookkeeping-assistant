@@ -44,7 +44,7 @@ export function prependTranscriptAcknowledgment(transcribedText, replyText) {
     return replyText;
   }
   const preview = truncateHeardPreview(trimmed);
-  return `🎙️ I heard: "${preview}"\n\n${replyText}`;
+  return `🎙️ _I heard: "${preview}"_\n\n${replyText}`;
 }
 
 /**

@@ -5,12 +5,17 @@ import { logInternalError, logProcessingEvent, truncateSenderId } from '../../ut
 import { SAFE_WHATSAPP_FALLBACK_REPLY } from './safeReply.js';
 import { sendWhatsAppText } from './whatsappSend.service.js';
 import { normalizePhoneNumber } from '../../utils/phoneNormalize.js'; // VULNERABILITY FIX
+import { card } from '../../utils/waFormat.js';
 
 // FIX (3.1): now that images are a supported, routed type (see handlers
 // below), this copy needs to say so — the old wording actively told people
 // photos weren't supported right as we started accepting them.
-const UNSUPPORTED_MEDIA_REPLY =
-  'I currently support text messages, voice notes, and receipt photos. Please send your bookkeeping request as text, a voice note, or a photo of a receipt.';
+const UNSUPPORTED_MEDIA_REPLY = card(
+  '⚠️',
+  'Unsupported Message Type',
+  ['I currently support text messages, voice notes, and receipt photos.'],
+  'Please send your bookkeeping request as text, a voice note, or a photo of a receipt.',
+);
 
 const handlers = {
   text: TextMessageService.handleTextMessage,

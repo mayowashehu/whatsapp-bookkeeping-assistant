@@ -8,6 +8,7 @@ import { mapParserDraftToDraftEntry } from './draftMapper.js';
 import { generateClarificationQuestion } from '../../ai/parsing/ClarificationService.js';
 import { missingFieldsForNormalizedTransaction } from '../../ai/parsing/TransactionParser.js';
 import { buildDuplicateFingerprint, findLikelyDuplicateEntry as defaultFindLikelyDuplicateEntry } from '../duplicateDetection.service.js';
+import { card } from '../../utils/waFormat.js';
 
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -171,12 +172,17 @@ export function createDraftManager(deps = {}) {
 
       const view = DraftFormatter.toDraftView(existing);
       const queuedNotice = incoming.length > 1
-        ? `I\u2019ve queued the ${incoming.length} new transactions you just sent \u2014 I\u2019ll bring them up right after this one.`
-        : `I\u2019ve queued the new transaction you just sent \u2014 I\u2019ll bring it up right after this one.`;
+        ? `I\u2019ve queued the ${incoming.length} new transactions you just sent — I\u2019ll bring them up right after this one.`
+        : `I\u2019ve queued the new transaction you just sent — I\u2019ll bring it up right after this one.`;
 
       return {
         state: 'PENDING_CONFIRMATION',
-        replyText: `You still have a pending entry waiting:\n${DraftFormatter.formatConfirmationMessage(view)}\n\n${queuedNotice} Reply YES to save this one, or CANCEL to discard it and move to the next.`,
+        replyText: card(
+          '📝',
+          'Pending Draft Still Waiting',
+          [DraftFormatter.formatConfirmationMessage(view), '', queuedNotice],
+          'Reply YES to save this one, or CANCEL to discard it and move to the next.',
+        ),
         pendingDraft: existing,
         entry: null,
       };

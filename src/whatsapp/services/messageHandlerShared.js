@@ -27,6 +27,7 @@ import { deleteLastTransactionService } from '../../services/deleteLastTransacti
 import { flagTransactionForReviewService } from '../../services/flagTransactionForReview.service.js';
 import { clearFlaggedTransactionService } from '../../services/clearFlaggedTransaction.service.js';
 import { editConfirmedTransactionService } from '../../services/editConfirmedTransaction.service.js';
+import { card, row } from '../../utils/waFormat.js';
 
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -318,7 +319,7 @@ export function buildMultiItemNotice(parseResult, { awaitingClarification = fals
     return '';
   }
 
-  const lines = previewPool.map((tx) => `- ${DraftFormatter.formatTransactionPreview(tx, knownProperties)}.`);
+  const lines = previewPool.map((tx) => `• ${DraftFormatter.formatTransactionPreview(tx, knownProperties)}`);
   if (lines.length === 0) {
     return '';
   }
@@ -327,14 +328,29 @@ export function buildMultiItemNotice(parseResult, { awaitingClarification = fals
     ? "I can handle them one at a time — let's start with the first one."
     : 'I can handle them one at a time. Shall I log the first one now?';
 
-  return `I detected multiple transactions:\n${lines.join('\n')}\n${followUp}\n\n`;
+  return `🧾 *Multiple Transactions Detected*\n\n${lines.join('\n')}\n\n_${followUp}_\n\n`;
 }
 
 function withGreetingPrefix(replyText, hadGreeting) {
   if (!hadGreeting || typeof replyText !== 'string' || !replyText) {
     return replyText;
   }
-  return `Hi! ${replyText}`;
+  return `👋 Hi!\n\n${replyText}`;
+}
+
+// Shared by both correction-mismatch call sites below (draft-correction
+// path and the confirmed-transaction-edit path) so the "did you mean a
+// new entry or an update to this one" prompt reads the same everywhere.
+function buildCorrectionMismatchReply(correctionParseResult, currentSummary) {
+  return card(
+    '🤔',
+    'Different Transaction?',
+    [
+      row('New text', correctionParseResult.mismatchNote || 'looks unrelated to your current draft'),
+      row('Current draft', currentSummary),
+    ],
+    'Did you mean to start a new entry, or update this one? Reply with the correction again more specifically, or send the new transaction on its own.',
+  );
 }
 
 async function handleParsedLogEntry({ parsed, fromNumber, senderId, hadGreeting = false, knownProperties = [] }) {
@@ -522,7 +538,7 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
         ? DraftFormatter.formatTransactionPreview(activeDraft.draftEntry, knownProperties)
         : 'your current draft';
       return {
-        replyText: `That sounds like it might be about a different transaction${correctionParseResult.mismatchNote ? ` (${correctionParseResult.mismatchNote})` : ''} than your current draft (${currentSummary}). Did you mean to start a new entry, or update this one? Reply with the correction again more specifically, or send the new transaction on its own.`,
+        replyText: buildCorrectionMismatchReply(correctionParseResult, currentSummary),
       };
     }
     return DraftManager.handleCorrection({
@@ -577,10 +593,10 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
         user: text,
         schemaHint: '{ "reply": "string" }',
       });
-      return { replyText: result.reply || "I'm not sure how to help with that. Please try again!" };
+      return { replyText: result.reply || "🤔 I'm not sure how to help with that — please try rephrasing!" };
     } catch (err) {
       console.error('[DEBUG] Error handling general inquiry, falling back to SOP:', err);
-      const fallbackReply = `Here's a quick guide to get you started:\n\n${SYSTEM_MANUAL.split('---')[1] || SYSTEM_MANUAL}`;
+      const fallbackReply = `📖 *Quick Guide*\n\n${SYSTEM_MANUAL.split('---')[1] || SYSTEM_MANUAL}`;
       return { replyText: fallbackReply };
     }
   }
@@ -597,18 +613,18 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
 
     if (/(would you like|do you want|try logging|log one now|log a transaction)/i.test(lastAssistantText)) {
       return {
-        replyText: `Great! Please share the details for *${env.businessName}*, for example: *Received 150,000 rent for Flat 2* or *Spent 15,000 on plumbing*.`,
+        replyText: `👍 Great! Please share the details for *${env.businessName}* — e.g. *Received 150,000 rent for Flat 2* or *Spent 15,000 on plumbing*.`,
       };
     }
 
     if (/(run a report|generate a report|generate a statement|monthly statement|statement now)/i.test(lastAssistantText)) {
       return {
-        replyText: 'Sure. Please send the request like *Monthly statement for Flat 2* or *Monthly statement for Green Villa for July 2026*.',
+        replyText: '📄 Sure — please send the request like *Monthly statement for Flat 2* or *Monthly statement for Green Villa for July 2026*.',
       };
     }
 
     return {
-      replyText: `Great. Please send the exact details you want me to work with for *${env.businessName}*, and I will guide you from there.`,
+      replyText: `👍 Great. Please send the exact details you want me to work with for *${env.businessName}*, and I will guide you from there.`,
     };
   }
 
@@ -743,12 +759,12 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
       if (answeredElsewhere?.replyText) {
         return {
           ...answeredElsewhere,
-          replyText: `${answeredElsewhere.replyText}\n\nBy the way, you still have a pending edit waiting \u2014 reply YES to save the change, or NO / CANCEL to stop.`,
+          replyText: `${answeredElsewhere.replyText}\n\n_💡 By the way, you still have a pending edit waiting — reply YES to save the change, or NO / CANCEL to stop._`,
         };
       }
 
       return {
-        replyText: 'Reply YES to save that change, or NO / CANCEL to stop.',
+        replyText: '✏️ *Pending Edit*\n\nReply YES to save that change, or NO / CANCEL to stop.',
         classification: 'EDIT_TRANSACTION',
       };
     }
@@ -986,7 +1002,7 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
       if (correctionParseResult?.possibleMismatch) {
         const currentSummary = DraftFormatter.formatTransactionPreview(activeDraft.draftEntry, knownProperties);
         return {
-          replyText: `That sounds like it might be about a different transaction${correctionParseResult.mismatchNote ? ` (${correctionParseResult.mismatchNote})` : ''} than your current draft (${currentSummary}). Did you mean to start a new entry, or update this one? Reply with the correction again more specifically, or send the new transaction on its own.`,
+          replyText: buildCorrectionMismatchReply(correctionParseResult, currentSummary),
         };
       }
 

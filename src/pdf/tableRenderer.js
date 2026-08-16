@@ -105,10 +105,22 @@ export function createTableRenderer(doc, options = {}) {
           doc.font(fonts.regular).fillColor(CHARCOAL);
         }
 
+        // `height` is set explicitly here so PDFKit can never silently
+        // insert its own page break mid-row if the actual rendered height
+        // ends up even a hair taller than the `heightOfString` estimate
+        // above. Without a bound, PDFKit's own auto-pagination can fire
+        // independently of `ensureSpace`, desyncing our locally tracked
+        // `y` from PDFKit's real current page — every row after that point
+        // then "lands" past the bottom margin and forces a new (empty)
+        // page, cascading into a stack of blank trailing pages. Bounding
+        // the height means PDFKit clips/ellipsizes instead of paginating;
+        // `ensureSpace` above remains the *only* place pages get added.
         doc.text(value, currentX + paddingX, y + paddingY, {
           width: column.width - paddingX * 2,
+          height: Math.max(0, doc.page.height - page.marginBottom - (y + paddingY)),
           align: column.align === 'right' ? 'right' : 'left',
           lineBreak: true,
+          ellipsis: true,
         });
         currentX += column.width;
       });

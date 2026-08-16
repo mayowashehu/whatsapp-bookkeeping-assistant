@@ -3,6 +3,7 @@ import {
   getLagosDateString,
   resolveProperty,
 } from '../ai/parsing/TransactionNormalizer.js';
+import { card } from '../utils/waFormat.js';
 
 /**
  * Extracts property / month / year for a STATEMENT_REQUEST.
@@ -306,11 +307,11 @@ export function buildClarificationQuestion({
   knownProperties = [],
 }) {
   const knownNames = (knownProperties || []).map((p) => p.name).filter(Boolean);
-  const knownList = knownNames.length ? ` Your known properties are: ${knownNames.join(', ')}.` : '';
+  const knownList = knownNames.length ? `Your known properties: ${knownNames.join(', ')}.` : null;
 
   if (propertyStatus === 'ambiguous' && propertyCandidates?.length > 1) {
     const names = propertyCandidates.map((p) => p.name).join(' or ');
-    return `Which property should I use for the statement: ${names}?`;
+    return card('📄', 'Which Property?', [`Did you mean: ${names}?`]);
   }
 
   // L: a friendlier, accurate recovery message. Statements can only cover a
@@ -319,27 +320,32 @@ export function buildClarificationQuestion({
   // and generate an (empty) statement for it. Instead: point at what IS on
   // file, and explain the one legitimate path to a new property.
   if (propertyStatus === 'none' && unmatchedProperty) {
-    return `I don't have "${unmatchedProperty}" saved as a property yet.${knownList} Which one should I use for this statement? (If it's a genuinely new property, log a transaction for it first — that's what adds it to your list — then ask for the statement again.)`;
+    return card(
+      '📄',
+      'Property Not Found',
+      [`I don't have "${unmatchedProperty}" saved as a property yet.`, knownList],
+      "Which one should I use for this statement? If it's genuinely new, log a transaction for it first, then ask for the statement again.",
+    );
   }
 
   if (missingFields.includes('property') && (missingFields.includes('month') || missingFields.includes('year'))) {
-    return `Which property, and which month/year, should the statement cover?${knownList}`;
+    return card('📄', 'Statement Details', ['Which property, and which month/year, should the statement cover?', knownList]);
   }
 
   if (missingFields.includes('property')) {
-    return `Which property should I generate the statement for?${knownList}`;
+    return card('📄', 'Which Property?', ['Which property should I generate the statement for?', knownList]);
   }
 
   if (missingFields.includes('month') && missingFields.includes('year')) {
-    return 'Which month and year should the statement cover?';
+    return card('📄', 'Which Period?', ['Which month and year should the statement cover?']);
   }
 
   if (missingFields.includes('month')) {
-    return 'Which month should the statement cover?';
+    return card('📄', 'Which Month?', ['Which month should the statement cover?']);
   }
 
   if (missingFields.includes('year')) {
-    return 'Which year should the statement cover?';
+    return card('📄', 'Which Year?', ['Which year should the statement cover?']);
   }
 
   return null;

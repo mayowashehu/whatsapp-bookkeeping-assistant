@@ -37,7 +37,7 @@ export function prependReadAcknowledgment(readText, replyText) {
     return replyText;
   }
   const preview = truncateReadPreview(trimmed);
-  return `📸 I read this receipt as: "${preview}"\n\n${replyText}`;
+  return `📸 _I read this receipt as: "${preview}"_\n\n${replyText}`;
 }
 
 /**

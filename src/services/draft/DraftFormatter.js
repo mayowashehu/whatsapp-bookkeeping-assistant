@@ -1,5 +1,10 @@
 import { formatNaira } from '../../utils/currencyFormatter.js';
 import { buildTransactionPreview } from '../transactionLookup.js';
+import { card, row, bold, italic, bullet } from '../../utils/waFormat.js';
+
+function bulletList(items) {
+  return items.map(bullet).join('\n');
+}
 
 // Canonical home for "preview a not-yet-drafted transaction" formatting.
 // Used both by messageHandlerShared.js's multi-item notice (previewing all
@@ -59,7 +64,7 @@ export function formatTransactionPreview(tx, knownProperties = []) {
       ? ` — ${tx.description.trim()}`
       : '';
 
-  return `[${type}] ${amount} for ${property}${category}${description}`;
+  return `${bold(`[${type}]`)} ${bold(amount)} for ${bold(property)}${category}${description}`;
 }
 
 function capitalize(value) {
@@ -80,7 +85,7 @@ function capitalize(value) {
 // single-item confirmation/saved-message path in line with that same
 // established pattern instead of dropping one of the two fields.
 function buildExpenseSubject(draftView) {
-  const property = draftView.propertyName || 'Unknown property';
+  const property = bold(draftView.propertyName || 'Unknown property');
   const category = draftView.category ? String(draftView.category).trim() : '';
   const description = draftView.description ? String(draftView.description).trim() : '';
   const descriptionAddsInfo = Boolean(description) && description.toLowerCase() !== category.toLowerCase();
@@ -106,10 +111,10 @@ export function buildTransactionSummary(draftView) {
   const typeLabel = capitalize(draftView.type);
 
   if (draftView.type === 'income') {
-    return `${typeLabel} ${amount} for ${property}`;
+    return `${typeLabel} ${bold(amount)} for ${bold(property)}`;
   }
 
-  return `${typeLabel} ${amount} for ${buildExpenseSubject(draftView)}`;
+  return `${typeLabel} ${bold(amount)} for ${buildExpenseSubject(draftView)}`;
 }
 
 // BUG FIX (manual WhatsApp testing, 🔴 — confirmed live): this never
@@ -122,53 +127,56 @@ export function buildTransactionSummary(draftView) {
 // the same "change the date" command two or three times before finally
 // sending YES. Appending the date whenever one is set closes that feedback
 // gap without changing anything about the income/expense wording above.
-function withDateSuffix(text, draftView) {
-  const formatted = formatDisplayDate(draftView?.transactionDate);
-  if (!formatted) return text;
-  // Insert the date right before the final sentence ("Reply YES...") so it
-  // reads naturally: "...for Orchid, dated 27 Jul 2026. Reply YES to save it."
-  return text.replace(/\.\s*(Reply YES.*)$/, `, dated ${formatted}. $1`);
-}
-
 export function formatConfirmationMessage(draftView) {
-  const amount = formatNaira(draftView.amount);
-  const property = draftView.propertyName || 'Unknown property';
+  const isIncome = draftView.type === 'income';
+  const date = formatDisplayDate(draftView?.transactionDate);
 
-  if (draftView.type === 'income') {
-    return withDateSuffix(`I've drafted an income entry of ${amount} for ${property}. Reply YES to save it.`, draftView);
-  }
+  const body = isIncome
+    ? [
+        row('Amount', formatNaira(draftView.amount)),
+        row('Property', draftView.propertyName || 'Unknown property'),
+        row('Date', date),
+      ]
+    : [
+        row('Amount', formatNaira(draftView.amount)),
+        row('Property', draftView.propertyName || 'Unknown property'),
+        row('Category', draftView.category ? capitalize(draftView.category) : null),
+        row('Note', draftView.description || null),
+        row('Date', date),
+      ];
 
-  const subject = buildExpenseSubject(draftView);
-  return withDateSuffix(
-    `I've drafted an expense of ${amount} for ${subject}. Reply YES to save it, or tell me what to change.`,
-    draftView,
-  );
+  const footer = isIncome
+    ? 'Reply YES to save it.'
+    : 'Reply YES to save it, or tell me what to change.';
+
+  return card('📝', `Draft Ready — ${capitalize(draftView.type)}`, body, footer);
 }
 
 export function formatCorrectionSuccessMessage(changeSummary) {
   const summary = changeSummary && String(changeSummary).trim() ? changeSummary : 'the draft';
-  return `I've updated ${summary}. Reply YES to save it.`;
+  return card('✏️', 'Draft Updated', [`Updated ${bold(summary)}.`], 'Reply YES to save it.');
 }
 
 export function formatCancelledMessage() {
-  return 'I\u2019ve discarded the pending entry. Nothing was saved.';
+  return card('🗑️', 'Discarded', ['Nothing was saved.']);
 }
 
 export function formatActiveDraftInquiryMessage(draftView) {
   const summary = buildTransactionSummary(draftView);
 
-  return `You have a pending draft: ${summary}. Reply YES to save it or CANCEL to discard it.`;
+  return card('📝', 'Pending Draft', [summary], 'Reply YES to save it, or CANCEL to discard it.');
 }
 
 export function formatClarificationMessage(question) {
-  return String(question || 'Which detail should I use for this transaction?');
+  const text = String(question || 'Which detail should I use for this transaction?');
+  return card('🔍', 'Quick Question', [text]);
 }
 
 export function formatSavedMessage(draftView) {
   const summary = buildTransactionSummary(draftView);
   const date = formatDisplayDate(draftView.transactionDate);
 
-  return `Saved: ${summary} on ${date}.`;
+  return card('✅', 'Saved', [summary], date ? `Dated ${date}` : null);
 }
 
 // Duplicate Detection (PROJECT_CONTEXT.md). Shown instead of the normal
@@ -180,15 +188,28 @@ export function formatDuplicateWarningMessage(draftView, matchedEntry) {
   const summary = buildTransactionSummary(draftView);
   const existingPreview = buildTransactionPreview(matchedEntry) || 'a similar transaction';
 
-  return `This looks similar to a transaction you recently logged: ${existingPreview}. Save another one — ${summary}? Reply YES to save it anyway, or NO to cancel this one.`;
+  return card(
+    '⚠️',
+    'Possible Duplicate',
+    [
+      row('Similar to', existingPreview),
+      row('New entry', summary),
+    ],
+    'Reply YES to save it anyway, or NO to cancel this one.',
+  );
 }
 
 export function formatNoDraftMessage() {
-  return '⚠️ There is no pending transaction to confirm. Send a new income or expense first.';
+  return card('⚠️', 'Nothing to Confirm', ['There is no pending transaction right now.'], 'Send a new income or expense first.');
 }
 
 export function formatNoPendingDraftMessage() {
-  return 'You don\u2019t have any pending entries right now. Send a transaction like *Paid 15,000 for repairs at Flat 2* whenever you\u2019re ready.';
+  return card(
+    '📋',
+    'No Pending Entries',
+    ['You don\u2019t have any pending entries right now.'],
+    'Send a transaction like *Paid 15,000 for repairs at Flat 2* whenever you\u2019re ready.',
+  );
 }
 
 export function toDraftView(pendingDraftDoc) {
@@ -220,25 +241,30 @@ export function toDraftView(pendingDraftDoc) {
 }
 
 export function formatNoAwaitingClarificationMessage() {
-  return [
-    'There is nothing waiting for clarification.',
-    '',
-    'If you want to change the pending transaction, just tell me what to edit.',
-    'Otherwise reply *YES* to save it or *cancel* to discard it.',
-  ].join('\n');
+  return card(
+    '📋',
+    'Nothing Awaiting Clarification',
+    [
+      'If you want to change the pending transaction, just tell me what to edit.',
+    ],
+    'Otherwise reply YES to save it, or CANCEL to discard it.',
+  );
 }
 
 export function formatCorrectionUnclearMessage() {
-  return [
-    'I\u2019m not sure what you want to change.',
-    '',
-    'For example you can say:',
-    '• Change the amount to ₦20,000',
-    '• Change the property to Flat 3',
-    '• Change the date to yesterday',
-    '',
-    'Or reply *YES* to save the current draft.',
-  ].join('\n');
+  return card(
+    '🔍',
+    'Not Sure What to Change',
+    [
+      'For example, you can say:',
+      bulletList([
+        'Change the amount to ₦20,000',
+        'Change the property to Flat 3',
+        'Change the date to yesterday',
+      ]),
+    ],
+    'Or reply YES to save the current draft.',
+  );
 }
 
 export function formatDisplayDate(value) {
@@ -267,7 +293,7 @@ export function formatDisplayDate(value) {
 // queued item has been turned into its own new draft (see
 // DraftManager.handleConfirmation).
 export function formatQueuedTransactionLeadIn(tx, knownProperties = []) {
-  return `I also caught a second transaction: ${formatTransactionPreview(tx, knownProperties)}.`;
+  return `${bold('➕ Next up:')} ${formatTransactionPreview(tx, knownProperties)}.`;
 }
 
 // Phase 6.1 — "acknowledge a pending draft when the user switches context."
@@ -276,7 +302,7 @@ export function formatQueuedTransactionLeadIn(tx, knownProperties = []) {
 // reply never mentioned that anything was still waiting. This is the short
 // trailing note messageHandlerShared.js appends in that situation.
 export function formatPendingDraftReminder() {
-  return 'By the way, you still have an unconfirmed entry waiting \u2014 reply YES to save it or CANCEL to discard it.';
+  return italic('💡 By the way, you still have an unconfirmed entry waiting — reply YES to save it, or CANCEL to discard it.');
 }
 
 // Companion note for the one context switch that does NOT leave the draft
@@ -286,7 +312,7 @@ export function formatPendingDraftReminder() {
 // the user an entry is "still waiting" moments after it was deleted. This
 // gives an honest, equally short heads-up instead.
 export function formatDraftClearedDuringContextSwitchNote() {
-  return 'Note: your previous unsaved entry was cleared while preparing this \u2014 send it again if you\u2019d still like to log it.';
+  return italic('💡 Note: your previous unsaved entry was cleared while preparing this — send it again if you\u2019d still like to log it.');
 }
 
 export default {
