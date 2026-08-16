@@ -328,7 +328,15 @@ export function createMetaApiClient(overrides = {}) {
         // whichever comes first — no extra bookkeeping needed here.
         ...(showTyping ? { typing_indicator: { type: 'text' } } : {}),
       }),
-      retry: false, // Don't retry read receipts - if it fails, it's fine
+      // FIX: this call now does double duty as the read-receipt AND the
+      // user-visible typing indicator, so a single transient Meta hiccup
+      // (429 rate limit, brief 5xx) can no longer be shrugged off the way
+      // a throwaway read receipt could. retry:true lets requestJson's
+      // exponential backoff absorb exactly those transient cases before
+      // giving up — see startTypingIndicatorKeepAlive in
+      // webhookReceive.service.js for the second half of this fix (what
+      // happens if every retry still fails).
+      retry: true,
     });
   }
 

@@ -29,6 +29,17 @@ import { card } from '../../utils/waFormat.js';
 // it must never be allowed to fail the actual message processing.
 const TYPING_INDICATOR_REFRESH_MS = 18000;
 
+// BUG FIX (live, confirmed): the initial markMessageAsRead call now retries
+// transient Meta errors internally (see MetaApiClient.js), but if it still
+// comes back unsuccessful — a real outage, not just a blip — this code used
+// to shrug and wait for the *next* scheduled interval tick, up to 18s away.
+// Most replies finish well inside 18s, so that failure was invisible to us
+// but meant the user saw zero typing indicator for the entire request, even
+// though the bot was actively working. A short, fast retry right after a
+// failed first attempt closes that window without adding real latency to
+// the common (already-succeeded) case.
+const TYPING_INDICATOR_QUICK_RETRY_MS = 2000;
+
 function startTypingIndicatorKeepAlive(messageId) {
   const timer = setInterval(() => {
     markMessageAsRead(messageId, { showTyping: true }).catch((err) => {
@@ -100,15 +111,34 @@ export async function processMessagePipeline(message, fullPayload) {
     // rather than a text bubble the user has to read and dismiss. It's
     // auto-dismissed the moment routeMessage below sends the real reply.
     let stopTypingKeepAlive = () => {};
+    let quickRetryTimer = null;
     try {
-      await markMessageAsRead(normalized.messageId, { showTyping: true });
+      const initialResult = await markMessageAsRead(normalized.messageId, { showTyping: true });
       // BUG FIX (live, confirmed): see startTypingIndicatorKeepAlive above —
       // without this, the indicator silently expired after 25s on any
       // slower request, leaving the user staring at total silence while the
-      // bot was still working. Only start the keep-alive once the initial
-      // call actually succeeded — no point refreshing an indicator that
-      // never showed in the first place.
+      // bot was still working. Start the keep-alive regardless of whether
+      // the very first call succeeded — a still-failed attempt gets its own
+      // fast retry below rather than waiting for this interval's first tick.
       stopTypingKeepAlive = startTypingIndicatorKeepAlive(normalized.messageId);
+
+      if (!initialResult.success) {
+        // The first attempt (with its own internal retries) still didn't
+        // land — this is the exact gap that produced "processed for a few
+        // seconds with no typing indicator at all". One fast follow-up well
+        // before the 18s interval closes that window without meaningfully
+        // delaying anything, since it fires in the background alongside
+        // whatever routeMessage is already doing.
+        quickRetryTimer = setTimeout(() => {
+          markMessageAsRead(normalized.messageId, { showTyping: true }).catch((err) => {
+            console.warn(
+              `[processMessagePipeline] Typing indicator quick-retry failed messageId=${normalized.messageId}`,
+              err,
+            );
+          });
+        }, TYPING_INDICATOR_QUICK_RETRY_MS);
+        if (typeof quickRetryTimer.unref === 'function') quickRetryTimer.unref();
+      }
     } catch (readErr) {
       console.warn(
         `[processMessagePipeline] Failed to mark message as read / show typing indicator messageId=${normalized.messageId}`,
@@ -124,6 +154,7 @@ export async function processMessagePipeline(message, fullPayload) {
       // Stop refreshing the instant we're done, success or failure — no
       // point re-showing "typing…" after the real reply already went out.
       stopTypingKeepAlive();
+      if (quickRetryTimer) clearTimeout(quickRetryTimer);
     }
   } catch (error) {
     console.error('[PIPELINE ERROR] Failed to process request:', error);

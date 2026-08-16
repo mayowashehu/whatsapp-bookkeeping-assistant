@@ -1,7 +1,7 @@
 import { logInternalError, logProcessingEvent } from '../../utils/safeLog.js';
 import { SAFE_WHATSAPP_FALLBACK_REPLY, SEND_FAILURE_FALLBACK_REPLY } from './safeReply.js';
 import { sendWhatsAppText } from './whatsappSend.service.js';
-import { processMessageContent, isCancelCommand, isConfirmationWord, isNegativeConfirmationWord } from './messageHandlerShared.js';
+import { processMessageContent, isCancelCommand, isConfirmationWord, isNegativeConfirmationWord, isExplicitTransaction } from './messageHandlerShared.js';
 import { debounceMessage } from '../../utils/messageDebouncer.js';
 import { checkFastPassIntent } from '../../services/textPreFilter.js';
 import { normalizePhoneNumber } from '../../utils/phoneNormalize.js';
@@ -19,6 +19,24 @@ const STILL_PROCESSING_REPLY = card('⏳', 'Still Processing', ["I'm still proce
  */
 function isBoundaryMessage(text) {
   return isCancelCommand(text) || isConfirmationWord(text) || isNegativeConfirmationWord(text);
+}
+
+// PERF: what "already reads as a finished thought" means for the debounce
+// window (see messageDebouncer.js's isComplete option). Deliberately reuses
+// isExplicitTransaction rather than inventing a new pattern — it's the same
+// bar the rest of the pipeline already trusts to fast-path a message as a
+// complete, actionable transaction on its own, so a message that clears it
+// here is held to exactly the same standard everywhere else in the app.
+// Terminal punctuation (a period/question mark/exclamation the sender typed
+// on purpose) is the other, independent signal: someone who finishes a
+// sentence with "." is very rarely about to send a second fragment of the
+// same thought. Both are conservative on purpose — this only ever shortens
+// the wait, never skips it, so a genuine same-turn follow-up still merges
+// in fine within the shorter window.
+function looksComplete(concatenatedText) {
+  const trimmed = String(concatenatedText || '').trim();
+  if (!trimmed) return false;
+  return isExplicitTransaction(trimmed) || /[.!?]["')\]]?$/.test(trimmed);
 }
 
 /**
@@ -127,7 +145,7 @@ export async function handleTextMessage(message) {
         });
       }
     });
-  }, { isBoundary: isBoundaryMessage });
+  }, { isBoundary: isBoundaryMessage, isComplete: looksComplete });
 
   // Log the individual message receipt
   logProcessingEvent('TextMessageService', {
