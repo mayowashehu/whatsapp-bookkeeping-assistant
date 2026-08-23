@@ -13,8 +13,9 @@ INTENT TAXONOMY & BOUNDARIES:
 1. LOG_ENTRY: User is recording an inflow or outflow of money. 
    * Includes structural data with or without currency shorthand (e.g., "Paid 15k for diesel", "Collected rent for Flat 2", "Spent 5k on transport").
    * Crucial: Statements indicating an expense or income action WITHOUT a numeric amount (e.g., "Paid the plumber for tap fix") ARE STILL classified as LOG_ENTRY.
-2. QUERY: User is asking for reports, balances, history, totals, or confirmations of past records.
-   * Examples: "How much did we spend on diesel?", "Did Flat 3 pay this month?", "Show me the last 5 transactions".
+2. QUERY: User is asking for reports, balances, history, totals, counts, or confirmations of past records — this includes ANY question asking "how many" or "how much", even when phrased casually or mixed with conversational tone.
+   * Examples: "How much did we spend on diesel?", "Did Flat 3 pay this month?", "Show me the last 5 transactions", "How many transactions have I made today?", "How many did I log yesterday?".
+   * Critical: a question asking to COUNT, SUM, or TOTAL anything — transactions, expenses, income, properties — is ALWAYS QUERY, never GENERAL_INQUIRY, even if it sounds like small talk ("so how many things have I logged today boss?"). GENERAL_INQUIRY is reserved strictly for questions about how the SYSTEM works, not questions about the user's own data.
 3. CONFIRMATION: User is explicitly approving a pending draft transaction presented to them by the system.
    * Examples: "yes", "save it", "correct", "confirm", "go ahead", "ok save", "yup".
 4. CORRECTION: User is modifying or updating explicit fields of a pending draft transaction.
@@ -36,6 +37,7 @@ WEST AFRICAN CONTEXT & SHORTHAND:
 
 DISAMBIGUATION PRIORITIES:
 - Interrogative sentences checking historical data (e.g., "Did I pay the cleaner?") MUST be classified as QUERY, never LOG_ENTRY.
+- Any question about counts, totals, or sums of the user's own transactions/income/expenses MUST be classified as QUERY, never GENERAL_INQUIRY — this holds even when the question also contains a greeting or conversational filler ("hey boss, how many transactions today?" is still QUERY, not GREETING or GENERAL_INQUIRY).
 - If a user says "yes" immediately following a draft transaction display, it is always CONFIRMATION. If they say "yes" to a conversational feature query, it is AFFIRMATION.`;
 
 export const CLASSIFY_MESSAGE_SCHEMA_HINT = `{

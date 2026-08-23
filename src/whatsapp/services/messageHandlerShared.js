@@ -455,19 +455,35 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
   }
 
   if (intent === 'CONFIRMATION') {
-    const pendingDeletion = await PendingDeletion.findOne({ fromNumber: cleanFrom }).lean();
+    // PERF FIX: these four lookups are mutually exclusive (a sender can
+    // have at most one pending action of these types at once) and none
+    // depends on another's result, but they were checked one at a time —
+    // in the common case where none of them match (by far the most common
+    // outcome, since most "yes" replies are just confirming a normal
+    // draft), that meant paying for four sequential DB round trips before
+    // ever reaching the actual DraftManager confirmation below. Running
+    // them concurrently turns that into the cost of the single slowest
+    // lookup instead of the sum of all four — a real, network-independent
+    // latency win on one of the most common message types in the app.
+    const [pendingDeletion, pendingFlag, pendingClear, pendingEdit] = await Promise.all([
+      PendingDeletion.findOne({ fromNumber: cleanFrom }).lean(),
+      PendingFlagReview.findOne({ fromNumber: cleanFrom }).lean(),
+      PendingFlagClear.findOne({ fromNumber: cleanFrom }).lean(),
+      PendingEntryEdit.findOne({ fromNumber: cleanFrom }).lean(),
+    ]);
+
+    // Precedence preserved exactly as before (deletion > flag > clear >
+    // edit > plain draft) — only the fetching became concurrent, not the
+    // decision logic.
     if (pendingDeletion) {
       return deleteLastTransactionService.handleConfirmation({ fromNumber: cleanFrom, senderId: cleanSender });
     }
-    const pendingFlag = await PendingFlagReview.findOne({ fromNumber: cleanFrom }).lean();
     if (pendingFlag) {
       return flagTransactionForReviewService.handleConfirmation({ fromNumber: cleanFrom, senderId: cleanSender });
     }
-    const pendingClear = await PendingFlagClear.findOne({ fromNumber: cleanFrom }).lean();
     if (pendingClear) {
       return clearFlaggedTransactionService.handleConfirmation({ fromNumber: cleanFrom, senderId: cleanSender });
     }
-    const pendingEdit = await PendingEntryEdit.findOne({ fromNumber: cleanFrom }).lean();
     if (pendingEdit && pendingEdit.stage === 'AWAITING_CONFIRMATION') {
       return editConfirmedTransactionService.handleConfirmation({ fromNumber: cleanFrom, senderId: cleanSender });
     }
@@ -587,7 +603,7 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
       const chatHistory = context.chatHistory ?? (await getConversationContext(cleanSender));
       const recentTransactions = context.recentTransactions ?? (await getRecentTransactions(cleanSender));
       const aiService = createAIService();
-      const systemPrompt = buildInquirySystemPrompt({ chatHistory, recentTransactions });
+      const systemPrompt = buildInquirySystemPrompt({ chatHistory, recentTransactions, referenceDate: new Date() });
       const result = await aiService.completeJson({
         system: systemPrompt,
         user: text,
@@ -728,6 +744,27 @@ async function tryAnswerQueryOrStatementWhilePending({ content, cleanFromNumber,
 // stand up findOrCreateUser/saveChatMessage/getActiveDraft as well — see
 // pendingEditInterruption.test.js.
 export async function resolvePipelineResult({ content, cleanFromNumber, senderId, knownProperties, activeDraft }) {
+  // PERF FIX: these four "is there a pending X for this sender" lookups
+  // used to be fired one at a time, spread out across this function (some
+  // immediately, some only reached after several earlier checks had
+  // already fallen through). None of them depends on another's result or
+  // on anything computed in between — they're all independent reads keyed
+  // on the same cleanFromNumber. Firing them together up front means the
+  // overwhelming common case (no pending state at all, just a normal
+  // message) pays for one round trip instead of up to four in sequence.
+  // The one behavior change is intentional and harmless: when pendingEdit
+  // IS active, the other three now get queried too instead of being
+  // skipped — three extra cheap indexed reads running concurrently with
+  // (not after) the pendingEdit read itself, so that path isn't any
+  // slower. The decision logic and its precedence below are byte-for-byte
+  // unchanged; only how the data got fetched changed.
+  const [pendingEdit, pendingFlag, pendingClear, pendingDeletion] = await Promise.all([
+    PendingEntryEdit.findOne({ fromNumber: cleanFromNumber }).lean(),
+    PendingFlagReview.findOne({ fromNumber: cleanFromNumber }).lean(),
+    PendingFlagClear.findOne({ fromNumber: cleanFromNumber }).lean(),
+    PendingDeletion.findOne({ fromNumber: cleanFromNumber }).lean(),
+  ]);
+
   // Task 3.3 — an in-progress "edit an already-confirmed transaction"
   // conversation takes priority over everything else in this function,
   // same reasoning as the activeDraft-scoped handling further below: the
@@ -737,7 +774,6 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
   // first so "cancel" mid-edit reliably cancels the EDIT, rather than
   // falling into the generic isCancelCommand branch below (which only
   // knows about drafts).
-  const pendingEdit = await PendingEntryEdit.findOne({ fromNumber: cleanFromNumber }).lean();
   if (pendingEdit) {
     if (isCancelCommand(content) || NEGATIVE_CONFIRMATION_WORDS.test(content.trim())) {
       const result = await editConfirmedTransactionService.handleCancellation({ fromNumber: cleanFromNumber });
@@ -800,7 +836,6 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
   // August 1st" would otherwise match CONFIRMATION_WORDS' anchored
   // leading-phrase pattern and short-circuit before the actual
   // disambiguation (the date) was ever read.
-  const pendingFlag = await PendingFlagReview.findOne({ fromNumber: cleanFromNumber }).lean();
   if (pendingFlag) {
     if (isCancelCommand(content) || (pendingFlag.entryId && NEGATIVE_CONFIRMATION_WORDS.test(content.trim()))) {
       const result = await flagTransactionForReviewService.handleCancellation({ fromNumber: cleanFromNumber });
@@ -817,7 +852,6 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
     }
   }
 
-  const pendingClear = await PendingFlagClear.findOne({ fromNumber: cleanFromNumber }).lean();
   if (pendingClear) {
     if (isCancelCommand(content) || (pendingClear.entryId && NEGATIVE_CONFIRMATION_WORDS.test(content.trim()))) {
       const result = await clearFlaggedTransactionService.handleCancellation({ fromNumber: cleanFromNumber });
@@ -852,7 +886,6 @@ export async function resolvePipelineResult({ content, cleanFromNumber, senderId
     return { ...result, replyText, classification: 'CANCEL' };
   }
 
-  const pendingDeletion = await PendingDeletion.findOne({ fromNumber: cleanFromNumber }).lean();
   if (pendingDeletion && CONFIRMATION_WORDS.test(content.trim())) {
     const result = await deleteLastTransactionService.handleConfirmation({ fromNumber: cleanFromNumber, senderId });
     return { ...result, replyText: result.replyText, classification: 'DELETE_LAST_TRANSACTION' };
@@ -1093,8 +1126,17 @@ export async function processMessageContent({ content, fromNumber }) {
   const rawResult = await resolvePipelineResult({ content, cleanFromNumber, senderId, knownProperties, activeDraft });
   const result = decorateForNewUser(rawResult, isNewUser);
 
+  // PERF FIX: this write already tolerates its own failure (see
+  // saveAssistantMessage's try/catch below) and nothing downstream in this
+  // request depends on it having finished — the reply is fully formed and
+  // ready to send the moment resolvePipelineResult returns. Awaiting it
+  // here just meant every single reply sat behind one extra DB round trip
+  // before the caller could hand it to sendWhatsAppText. Letting it run in
+  // the background shaves that write off the critical path to the user's
+  // phone on every message, with no change in behavior beyond it landing
+  // in chat history a few milliseconds later than the reply itself did.
   if (result?.replyText) {
-    await saveAssistantMessage(senderId, result.replyText);
+    saveAssistantMessage(senderId, result.replyText);
   }
 
   return result;

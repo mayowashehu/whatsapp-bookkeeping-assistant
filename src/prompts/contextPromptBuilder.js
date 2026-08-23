@@ -1,5 +1,6 @@
 import { SYSTEM_MANUAL } from './systemManual.js';
 import env from '../config/env.js';
+import { getLagosDateString } from '../ai/parsing/TransactionNormalizer.js';
 
 export const APP_CAPABILITIES = Object.freeze([
   "Log Income (e.g., rent received, payments from tenants)",
@@ -30,7 +31,34 @@ const PERSONA = `You are the official AI Bookkeeper for ${env.businessName}.
 
 const EMPATHY_RULES = `1. If the user expresses frustration ("I'm confused", "How do I do this", "This isn't working"), acknowledge their confusion first and provide ONLY Step 1 of the correct process (never a wall of text).
 2. If the user's request is ambiguous ("Log my property"), ask polite, specific follow-up questions to clarify.
-3. Always base your answers on real data from the context window.`;
+3. You may reference real transactions from the context window by name, amount, and property to sound personal and informed — but you are NOT a reporting engine, and counting or date-math is explicitly not your job here (see DATE_ACCURACY_RULES below).`;
+
+// BUG FIX (live, confirmed — the exact failure): "How many transactions
+// have I made today?" was misclassified as GENERAL_INQUIRY instead of
+// QUERY, landing here — and this prompt never told the model what
+// today's actual date was. Left to infer "today" from a bare list of
+// transaction timestamps, the model guessed, and got it wrong by a full
+// day: it read a transaction dated 21/08/2026 as "today" (₦5,000 EXPENSE
+// at Orchid), while the deterministic QUERY path — asked the near-
+// identical question moments later — correctly found zero transactions
+// for the real today. Two different answers to the same question in the
+// same conversation, because only one of the two paths actually computed
+// a date instead of guessing at one.
+//
+// This is fixed at two layers on purpose, because a classifier will
+// occasionally misroute a message no matter how well-tuned it is (see
+// classifyMessage.js for the classifier-side tightening) — this layer
+// makes sure that even when a date-relative question DOES slip into
+// GENERAL_INQUIRY, the model can never repeat this exact failure, because
+// it's now given the real date and told explicitly not to count/compute.
+function buildDateAccuracyRules(referenceDate = new Date()) {
+  const todayLagos = getLagosDateString(referenceDate);
+  return `DATE_ACCURACY_RULES (do not violate these under any circumstance):
+- Today's actual date, right now, in this business's timezone (Africa/Lagos), is ${todayLagos}. This is the ONLY correct value for "today" — never infer it from the transaction list below, from training data, or from any other message in this conversation.
+- You are NOT a reporting engine. If the user asks for a COUNT, TOTAL, SUM, or a date-scoped figure (e.g. "how many transactions today", "how much did I spend this week", "how many yesterday"), do NOT calculate it yourself from the transaction list below, even though it's right there — you are highly prone to getting relative dates wrong this way, and a wrong number here is worse than no number.
+- Instead, tell the user plainly that you'll hand that off for an exact answer, and restate their question back as a direct query (e.g. "Let me get you an exact count — one moment" is not your job to say either; simply respond that they can ask it as a direct question and it will be answered precisely, e.g. by rephrasing as "Total transactions today" or similar).
+- You MAY still reference specific individual transactions by name/amount/property/date from the list below in a general, non-counting way (e.g. "I see you logged a diesel expense recently") — the restriction is specifically on counting, summing, or reasoning about which date bucket something falls into.`;
+}
 
 // FIX (2.1): appended (not swapped in) when buildInquirySystemPrompt is
 // called for a genuinely UNKNOWN message rather than a real GENERAL_INQUIRY
@@ -83,10 +111,12 @@ ${transactionsSection ? transactionsSection + '\n' : ''}
 ${baseSystemPrompt}`;
 }
 
-export function buildInquirySystemPrompt({ chatHistory = [], recentTransactions = [], unclear = false } = {}) {
+export function buildInquirySystemPrompt({ chatHistory = [], recentTransactions = [], unclear = false, referenceDate = new Date() } = {}) {
   const capabilitiesSection = `EXACT THINGS YOU CAN HELP WITH (NO HALLUCINATIONS, NO GUESSES):
 ${APP_CAPABILITIES.map(cap => `- ${cap}`).join('\n')}
 If the user asks for a feature not on this list, state clearly that it is currently unavailable.`;
+
+  const dateAccuracySection = buildDateAccuracyRules(referenceDate);
 
   let chatHistorySection = "";
   if (chatHistory.length > 0) {
@@ -111,6 +141,8 @@ ${capabilitiesSection}
 ${MICRO_FAQ}
 
 ${EMPATHY_RULES}
+
+${dateAccuracySection}
 
 ${chatHistorySection ? chatHistorySection + '\n' : ''}
 ${transactionsSection ? transactionsSection + '\n' : ''}

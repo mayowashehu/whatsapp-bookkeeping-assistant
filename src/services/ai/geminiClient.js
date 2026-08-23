@@ -32,11 +32,19 @@ export const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest';
 // ships new model generations without needing a code change — the
 // concrete versioned models below it are just extra safety nets in case
 // an alias itself is ever unavailable on a given key/tier.
+//
+// gemini-2.5-flash-lite removed (confirmed 404 "no longer available to
+// new users" — live error, Aug 2026): keeping a permanently-dead model in
+// the fallback chain doesn't just waste one attempt's latency on this
+// project, it wastes it on *every* brand-new Google Cloud project this
+// code ever runs under from now on, since new projects never had access
+// to it to begin with. If Google deprecates one of the remaining entries
+// the same way, remove it here the same way — don't leave dead models in
+// this list "just in case."
 export const CURATED_FALLBACK_MODELS = Object.freeze([
   'gemini-flash-lite-latest',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash-lite',
 ]);
 
 // FIX (Phase 1.0b): "sticky" self-healing model selection. API keys get
