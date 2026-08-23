@@ -237,6 +237,18 @@ function interpretDeterministic(lowerText, chatHistory = []) {
   // transaction, not a query, and falls through to the AI classifier.
   const queryPatterns = [
     /\bhow much\b/,
+    // BUG FIX (live, confirmed — "How many transactions have I made
+    // today?" answered with a canned "please rephrase" instead of a real
+    // count): this list had \bhow much\b but never \bhow many\b, so a
+    // count-style question fell through to inquiryPatterns below, where a
+    // bare \bhow\b catches almost anything containing the word "how" and
+    // locks in GENERAL_INQUIRY — before the AI classifier, and the prompt
+    // tightening in classifyMessage.js, ever get a chance to run at all.
+    // This is a purely deterministic routing bug, not an AI judgment call;
+    // fixing it here (matching how every other unambiguous case in this
+    // function is handled) is more reliable than steering a model.
+    /\bhow many\b/,
+    /\bcount\b/,
     /\btotal\b/,
     /\binexpense\b/,
     /\bexpense\b/,
