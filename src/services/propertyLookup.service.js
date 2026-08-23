@@ -28,7 +28,7 @@ export async function getKnownProperties(senderId) {
       .lean();
   }
 
-  console.log('[DEBUG] getKnownProperties docs =', docs);
+ // console.log('[DEBUG] getKnownProperties docs =', docs);
 
   // VULNERABILITY 4 FIX: Strip dangerously short/ambiguous aliases to prevent broad fuzzy collisions
   return docs.map((doc) => {
