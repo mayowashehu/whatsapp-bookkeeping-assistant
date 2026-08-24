@@ -27,7 +27,33 @@ const PERSONA = `You are the official AI Bookkeeper for ${env.businessName}.
 - Be respectful and slightly deferential (you may use terms like "boss" where appropriate).
 - Keep replies concise and easy to read.
 - Never hallucinate or make up capabilities.
-- Always confirm before saving any transaction.`;
+- You are having a HELP/CHAT conversation right now, not the real transaction-logging pipeline (see NO_FAKE_DRAFTS_RULE below) — "always confirm before saving" describes how the REAL pipeline behaves when you tell the user to resend their message, not something you do yourself in this reply.`;
+
+// BUG FIX (live, confirmed — real data-loss risk): a user typed transaction
+// details in label form ("Gas refill: 12,200 / Property: A7 downstairs")
+// with no leading verb, got misclassified into this exact prompt path
+// (GENERAL_INQUIRY), and the model — with nothing stopping it — generated
+// a full fake draft card ("I have your expense draft ready...Reply yes to
+// confirm") that visually mimics the REAL DraftFormatter output. No
+// PendingDraft was ever created. The user believed a transaction was
+// logged; it silently never was. Then, on the next turn, the model saw its
+// OWN fabricated draft sitting in chat history and hallucinated a SECOND,
+// even more convincing fake — a bogus "duplicate transaction" warning —
+// compounding the deception.
+//
+// See messageHandlerShared.js's isStructuredTransactionEntry for the
+// classification-side fix (catching this specific phrasing before it ever
+// reaches this prompt at all). This rule is the second, independent layer:
+// even if some future message shape slips past that detector the same
+// way, this prompt can no longer produce anything that looks like it came
+// from the real pipeline — it can only ever hand the user back to it.
+function buildNoFakeDraftsRule() {
+  return `NO_FAKE_DRAFTS_RULE (do not violate this under any circumstance):
+- You are a HELP/CHAT assistant in this exact reply. You have NO ability to create, save, confirm, or check off a transaction yourself — that only happens in the real logging pipeline, which you are not currently running.
+- NEVER produce a message that looks like a transaction draft, confirmation card, or receipt — no "Amount:", "Property:", "Category:", "Date:" field list, no "Reply yes to confirm", no claiming a transaction is "ready" or has been "logged"/"saved"/"recorded". That is exclusively the real system's job, never yours here.
+- NEVER claim or imply that something was already logged, saved, or is a duplicate of something already logged — you have no access to check that, and guessing risks telling the user something false about their own financial records.
+- If the message you're replying to looks like it might BE transaction details (an amount, a property, something bought or paid for), do not try to process it yourself at all. Simply and briefly tell the user to resend it as a plain message (e.g. "Paid 12,200 for gas refill at A7 downstairs") and it will be drafted properly — do not restate their numbers back as if you're drafting them.`;
+}
 
 const EMPATHY_RULES = `1. If the user expresses frustration ("I'm confused", "How do I do this", "This isn't working"), acknowledge their confusion first and provide ONLY Step 1 of the correct process (never a wall of text).
 2. If the user's request is ambiguous ("Log my property"), ask polite, specific follow-up questions to clarify.
@@ -117,6 +143,7 @@ ${APP_CAPABILITIES.map(cap => `- ${cap}`).join('\n')}
 If the user asks for a feature not on this list, state clearly that it is currently unavailable.`;
 
   const dateAccuracySection = buildDateAccuracyRules(referenceDate);
+  const noFakeDraftsSection = buildNoFakeDraftsRule();
 
   let chatHistorySection = "";
   if (chatHistory.length > 0) {
@@ -143,6 +170,8 @@ ${MICRO_FAQ}
 ${EMPATHY_RULES}
 
 ${dateAccuracySection}
+
+${noFakeDraftsSection}
 
 ${chatHistorySection ? chatHistorySection + '\n' : ''}
 ${transactionsSection ? transactionsSection + '\n' : ''}
