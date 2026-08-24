@@ -210,10 +210,53 @@ export function isExplicitTransaction(text) {
   const { body } = splitLeadingGreeting(text);
   const clean = body.toLowerCase().trim();
 
-  return (
+  if (
     EXPLICIT_TXN_START_VERB.test(clean) &&
     (EXPLICIT_TXN_VERB_THEN_VALUE.test(clean) || EXPLICIT_TXN_CURRENCY_THEN_VERB.test(clean))
-  );
+  ) {
+    return true;
+  }
+
+  return isStructuredTransactionEntry(body);
+}
+
+// BUG FIX (live, confirmed — real data-loss risk): a transaction typed in
+// "label: value" form with no leading verb at all — e.g.
+// "Gas refill: 12,200\nProperty: A7 downstairs\nDate: 24th Aug 2026" —
+// matched none of the verb-led patterns above, so it fell all the way
+// through to classifyMessage's deterministic layer. That layer has a bare
+// /\bproperty\b/ rule under GENERAL_INQUIRY (see MessageClassifier.js) —
+// meant for genuine questions like "how do I add a property?" — which
+// fires on ANY message containing the word "property" at all, including
+// one that's plainly listing transaction fields. GENERAL_INQUIRY then
+// handed the raw text to a free-form AI chat reply, which — with nothing
+// stopping it — HALLUCINATED a fake draft card that visually mimics
+// DraftFormatter's real output ("I have your expense draft ready...Reply
+// yes to confirm") despite no PendingDraft ever being created. The user
+// believes they logged a transaction; nothing was ever saved.
+//
+// The fix here closes the root cause: recognize this label-style format
+// up front, the same way a verb-led message already skips classification
+// entirely and goes straight to the real parser/draft pipeline. See
+// contextPromptBuilder.js for the second, independent layer — GENERAL_INQUIRY
+// itself is now also forbidden from ever producing draft-looking text, so
+// this exact failure mode can't recur even if some other phrasing still
+// slips past this detector.
+//
+// Deliberately requires BOTH signals together, not just the bare word
+// "property": at least one generic "label: value" line (broad — could be
+// any label the user chooses, like "Gas refill: 12,200"), AND a
+// recognizable bookkeeping field label (Property/Category/Date/Amount)
+// with its own colon. That combination is specific enough to essentially
+// never appear in a genuine question, while still catching real users
+// typing transactions as a small structured note instead of a sentence.
+const COLON_VALUE_LINE_PATTERN = /^[^\n:]{2,40}:\s*\S.*$/m;
+const BOOKKEEPING_FIELD_LABEL_PATTERN = /\b(property|category|date|amount)\s*:/i;
+
+export function isStructuredTransactionEntry(text) {
+  if (typeof text !== 'string') return false;
+  if (!MONEY_AMOUNT_PATTERN.test(text)) return false;
+  return COLON_VALUE_LINE_PATTERN.test(text) && BOOKKEEPING_FIELD_LABEL_PATTERN.test(text);
 }
 
 // FIX (W, related): previews now resolve to human-readable property names
@@ -1158,4 +1201,4 @@ export default {
   splitLeadingGreeting,
   routeByIntent,
   processMessageContent,
-};
+}
