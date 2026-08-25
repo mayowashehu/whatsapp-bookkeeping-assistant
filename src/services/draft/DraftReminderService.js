@@ -4,7 +4,11 @@ import { toDraftView, formatConfirmationMessage } from './DraftFormatter.js';
 import { withSenderLock } from '../../utils/concurrencyLocks.js';
 import { card } from '../../utils/waFormat.js';
 
-const REMINDER_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+// PendingDraft.expiresAt has a 24h TTL that hard-deletes the draft (see
+// models/PendingDraft.js). Reminding at 20h leaves a 4h buffer for the user
+// to act on the nudge before the draft is gone for good — reminding right
+// at 24h risks the TTL sweep beating the reminder send.
+const REMINDER_THRESHOLD_MS = 20 * 60 * 60 * 1000; // 20 hours
 
 export async function checkAndRemindStaleDrafts() {
   try {

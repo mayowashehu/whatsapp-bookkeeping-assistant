@@ -4,10 +4,11 @@
 
 export function formatGreetingReply() {
   return [
-    '👋 Hello! I\'m here to help with your bookkeeping.',
+    '👋 *Welcome to your bookkeeping assistant.*',
     '',
-    'Send a transaction like: *Paid 15,000 for repairs at Flat 2*',
-    'Or ask for a report like: *Monthly statement for Flat 2*',
+    'I keep track of income and expenses across your properties, so you always know where things stand \u2014 no spreadsheets, no manual entry.',
+    '',
+    'Just tell me what happened, in your own words, and I\u2019ll take it from there. When you\u2019re ready, I can also pull up a statement for any property.',
   ].join('\n');
 }
 
