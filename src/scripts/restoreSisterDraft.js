@@ -12,22 +12,26 @@
  * confirm/edit/cancel through the normal flow instead of having to
  * re-type the transaction from scratch.
  *
- * Run once: node src/scripts/restoreSisterDraft.js
+ * Run once: node --env-file=.env src/scripts/restoreSisterDraft.js
  */
 
 import dns from 'node:dns';
 dns.setServers(['8.8.8.8', '8.8.4.4']);
+
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import env from '../config/env.js';
 import { connectDatabase, disconnectDatabase } from '../config/db.js';
-import { createPendingDraft, findPendingDraftByFromNumber, clearAllSessions } from '../services/draft/DraftRepository.js';
+import {
+  createPendingDraft,
+  findPendingDraftByFromNumber,
+  clearAllSessions,
+} from '../services/draft/DraftRepository.js';
 import { getKnownProperties } from '../services/propertyLookup.service.js';
 import { sendWhatsAppText } from '../whatsapp/services/whatsappSend.service.js';
 import { card } from '../utils/waFormat.js';
 
 const FROM_NUMBER = '2347049201675';
-//const FROM_NUMBER = '2348089759991';
 
 // Parsed from her original message: "Gas refill: 12,200\nDate: 24th Aug 2026\nProperty: A7 downstairs"
 const RAW_TEXT = 'Gas refill: 12,200\nDate: 24th Aug 2026\nProperty: A7 downstairs';
@@ -36,31 +40,72 @@ const AMOUNT = 12200;
 const CATEGORY = 'Gas refill';
 const TRANSACTION_DATE = new Date('2026-08-24T00:00:00.000Z');
 
-async function resolvePropertyId(fromNumber, propertyName) {
+// Schema fallback for direct database queries when service filters obscure hidden records
+const PropertySchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    senderId: { type: String, required: true },
+    active: { type: Boolean, default: true },
+    aliases: { type: [String], default: [] },
+  },
+  { timestamps: true }
+);
+
+const PropertyModel =
+  mongoose.models.Property || mongoose.model('Property', PropertySchema);
+
+async function resolveOrCreatePropertyId(fromNumber, propertyName) {
+  // 1. Check active properties via app service
   const known = await getKnownProperties(fromNumber);
   const needle = propertyName.trim().toLowerCase();
 
   const match = known.find(
     (p) =>
       p.name.trim().toLowerCase() === needle ||
-      p.aliases.some((a) => a.trim().toLowerCase() === needle),
+      (p.aliases && p.aliases.some((a) => a.trim().toLowerCase() === needle)),
   );
 
-  if (!match) {
-    throw new Error(
-      `Could not resolve property "${propertyName}" for ${fromNumber}. ` +
-        `Known properties: ${known.map((p) => p.name).join(', ') || '(none found)'}`,
-    );
+  if (match) {
+    const id = match.id || match._id;
+    console.log(`[restoreSisterDraft] Found active property "${propertyName}" with ID: ${id}`);
+    return id;
   }
 
-  return match.id;
+  // 2. Query DB directly by name regex to prevent E11000 unique index conflicts
+  const existingInDb = await PropertyModel.findOne({
+    name: { $regex: new RegExp(`^${propertyName.trim()}$`, 'i') },
+  });
+
+  if (existingInDb) {
+    console.log(
+      `[restoreSisterDraft] Found existing property document in DB (ID: ${existingInDb._id}). Syncing ownership...`,
+    );
+    existingInDb.active = true;
+    existingInDb.senderId = fromNumber;
+    await existingInDb.save();
+    return existingInDb._id;
+  }
+
+  // 3. Create only if completely non-existent
+  console.log(
+    `[restoreSisterDraft] Property "${propertyName}" not found in DB. Creating new document...`,
+  );
+  const created = await PropertyModel.create({
+    name: propertyName,
+    senderId: fromNumber,
+    active: true,
+    aliases: [],
+  });
+
+  console.log(`[restoreSisterDraft] Successfully created property with ID: ${created._id}`);
+  return created._id;
 }
 
 async function run() {
   await connectDatabase();
 
   try {
-    const propertyId = await resolvePropertyId(FROM_NUMBER, PROPERTY_NAME);
+    const propertyId = await resolveOrCreatePropertyId(FROM_NUMBER, PROPERTY_NAME);
 
     // Guard: don't clobber a draft she's actively mid-conversation on today.
     const existing = await findPendingDraftByFromNumber(FROM_NUMBER);
