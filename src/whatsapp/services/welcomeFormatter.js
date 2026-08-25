@@ -25,25 +25,27 @@ export function formatHelpCard({ isGreeting = false } = {}) {
   }
 
   return [
-    '⚠️ *I didn\'t quite understand that.*',
+    '👋 *I didn\u2019t quite catch that \u2014 no worries, let\u2019s get you sorted.*',
     '',
-    'Here are a few things you can ask me to do:',
+    'Here\u2019s what I can help with:',
     '',
-    '📝 *Log income or expenses*',
-    '- "Paid ₦15,000 for repairs at Flat 2"',
-    '- "Received ₦200,000 rent for Flat 2"',
+    '📝 *Log a transaction*',
+    '- Type it: "Paid ₦15,000 for repairs at Flat 2"',
+    '- Send a *photo* of a receipt',
+    '- Send a *voice note*',
     '',
     '📊 *Check your records*',
     '- "How much rent came in this month?"',
-    '- "Total repairs this year"',
     '- "List my properties"',
     '',
     '📄 *Generate statements*',
     '- "Generate July statement for Flat 2"',
     '',
-    '💡 *Tips*',
-    '- Reply *YES* to save a pending transaction.',
-    '- Say *cancel* if you don\'t want to save it.',
+    '✏️ *Fix something*',
+    '- "Delete my last transaction"',
+    '- "Change the amount to ₦20,000" (while a draft is pending)',
+    '',
+    '💡 Reply *YES* to save a pending transaction, or *cancel* to drop it.',
   ].join('\n');
 }
 

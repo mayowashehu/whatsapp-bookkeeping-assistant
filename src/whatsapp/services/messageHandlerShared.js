@@ -629,7 +629,7 @@ export async function routeByIntent({ intent, text, fromNumber, knownProperties,
   }
 
   if (intent === 'GREETING') {
-    return { replyText: formatHelpCard({ isGreeting: true }) };
+    return { replyText: formatHelpCard({ isGreeting: true }), classification: 'GREETING' };
   }
 
   if (intent === 'GENERAL_INQUIRY') {
