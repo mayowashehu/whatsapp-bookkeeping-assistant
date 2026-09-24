@@ -8,7 +8,6 @@ export const REQUIRED_ENV_VARS = Object.freeze([
   'WHATSAPP_ACCESS_TOKEN',
   'WHATSAPP_PHONE_NUMBER_ID',
   'META_APP_SECRET',
-  'GEMINI_API_KEY',
   'GEMINI_MODEL',
 ]);
 
@@ -20,6 +19,13 @@ export function assertRequiredEnv(envSource = process.env) {
     const value = envSource[key];
     return value === undefined || value === null || String(value).trim() === '';
   });
+
+  const hasGeminiKey =
+    String(envSource.GEMINI_API_KEY || '').trim() !== '' ||
+    String(envSource.GEMINI_API_KEYS || '').trim() !== '';
+  if (!hasGeminiKey) {
+    missing.push('GEMINI_API_KEY');
+  }
 
   if (missing.length === 0) {
     return;

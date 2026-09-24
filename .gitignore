@@ -21,7 +21,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-
+*.zip
 # Build / coverage
 coverage/
 dist/

@@ -3,7 +3,12 @@ import {
   getGeminiClassifierModel,
   getStickyModel,
   recordSuccessfulModel,
+  markModelCooldown,
+  isModelCooling,
   CURATED_FALLBACK_MODELS,
+  getGeminiApiKey,
+  getGeminiApiKeys,
+  rotateGeminiApiKey,
 } from '../../services/ai/geminiClient.js';
 import { createAppError } from '../../utils/createAppError.js';
 import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
@@ -27,55 +32,84 @@ export function cleanJsonResponse(rawText) {
   return cleaned;
 }
 
-// FIX (Phase 1.0, 🔴 — confirmed live, Aug 7 transcript + logs): the old
-// flow here was: try the configured model, retry it once after a fixed
-// 2000ms sleep on 429/503, then — on ANY remaining failure — trigger a
-// live "list all models" discovery call and cycle through whatever came
-// back (including dead/deprecated/heavy models) at up to the full 30s
-// per-attempt timeout each. Measured root cause chain on a real failing
-// message: primary model times out at the full 30,000ms → five more
-// dead/quota-limited models fail in sequence (~13-15s of pure dead time)
-// → a working model is finally reached. Total: 43-45s for one message.
-//
-// Fixed via three changes, all working together:
-//   1. No more dynamic discovery — CURATED_FALLBACK_MODELS (see
-//      geminiClient.js) replaces the live catalog call entirely.
-//   2. No more in-place retry-with-sleep on the same model — a model that
-//      is genuinely overloaded or rate-limited right now is not more
-//      likely to succeed 2000ms later than the NEXT model in the curated
-//      list is to succeed immediately, so we move on instead of waiting.
-//   3. A hard total wall-clock budget (env.aiTotalBudgetMs) that every
-//      attempt's own timeout is clamped against, so the cascade can never
-//      run longer than that regardless of how many candidates remain.
-function buildAttemptOrder(configuredModel) {
-  const ordered = [];
-  const sticky = getStickyModel();
+const TRANSIENT_CODES = new Set([
+  'AI_TIMEOUT',
+  'AI_RATE_LIMIT',
+  'AI_PROVIDER_OVERLOADED',
+  'AI_PROVIDER_ERROR',
+  'AI_REQUEST_FAILED',
+]);
 
-  if (sticky) {
-    ordered.push(sticky);
-  }
-  if (!ordered.includes(configuredModel)) {
-    ordered.push(configuredModel);
-  }
-  for (const model of CURATED_FALLBACK_MODELS) {
-    if (!ordered.includes(model)) {
-      ordered.push(model);
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryDelayMs(payload) {
+  const details = payload?.error?.details;
+  if (!Array.isArray(details)) return null;
+
+  for (const detail of details) {
+    const retryDelay = detail?.retryDelay;
+    if (typeof retryDelay === 'string') {
+      const match = retryDelay.match(/^(\d+(?:\.\d+)?)s$/i);
+      if (match) return Math.round(Number(match[1]) * 1000);
+    }
+    if (retryDelay && typeof retryDelay.seconds === 'number') {
+      return retryDelay.seconds * 1000 + Math.round((retryDelay.nanos || 0) / 1e6);
     }
   }
-  return ordered;
+  return null;
+}
+
+function withRetryAfter(error, retryAfterMs) {
+  if (retryAfterMs && retryAfterMs > 0) {
+    error.retryAfterMs = retryAfterMs;
+  }
+  return error;
+}
+
+// Sticky-first, then configured, then curated fallbacks. Models that just
+// 503'd / timed out are pushed to the end for ~45s so the next user
+// message does not immediately re-burn the same hung alias.
+function buildAttemptOrder(configuredModel) {
+  const preferred = [];
+  const cooling = [];
+  const seen = new Set();
+
+  function push(model) {
+    if (!model || seen.has(model)) return;
+    seen.add(model);
+    if (isModelCooling(model)) cooling.push(model);
+    else preferred.push(model);
+  }
+
+  push(getStickyModel());
+  push(configuredModel);
+  for (const model of CURATED_FALLBACK_MODELS) {
+    push(model);
+  }
+  return [...preferred, ...cooling];
+}
+
+function getFastHopTimeoutMs() {
+  // First pass hops across candidates quickly. A 503 returns in milliseconds;
+  // a hung socket should not consume the whole budget before we try flash
+  // (non-lite) or a second API key. Later rounds use the full aiTimeoutMs
+  // because a free-tier model that is merely queued often needs 6–10s.
+  return Math.min(env.aiTimeoutMs, 5000);
 }
 
 /**
- * Gemini AI provider — curated, sticky-first model selection with a hard
- * total wall-clock budget. See buildAttemptOrder / geminiClient.js above
- * for why this replaced the old dynamic-discovery fallback.
+ * Gemini AI provider — curated models, optional API-key pool, and a hard
+ * total wall-clock budget with one or more backoff retries for free-tier
+ * overload (429 / 503 / timeout).
  */
 export function createGeminiAIService(options = {}) {
   const configuredModel =
     options.model || getGeminiClassifierModel() || env.geminiClassifierModel;
 
-  async function executeApiCall(targetModel, system, user, schemaHint, timeoutMs) {
-    if (!env.geminiApiKey) {
+  async function executeApiCall(targetModel, system, user, schemaHint, timeoutMs, apiKey) {
+    if (!apiKey) {
       throw createAppError('AI_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
     }
 
@@ -108,7 +142,7 @@ export function createGeminiAIService(options = {}) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-goog-api-key': env.geminiApiKey,
+            'x-goog-api-key': apiKey,
           },
           body: JSON.stringify(body),
         },
@@ -139,11 +173,15 @@ export function createGeminiAIService(options = {}) {
     if (!response.ok) {
       const status = response.status;
       const apiMessage = payload?.error?.message || `HTTP ${status} ${response.statusText}`;
+      const retryAfterMs = parseRetryDelayMs(payload);
 
       if (status === 429) {
-        throw createAppError('AI_RATE_LIMIT', `Rate limit exceeded: ${apiMessage}`, {
-          statusCode: 429,
-        });
+        throw withRetryAfter(
+          createAppError('AI_RATE_LIMIT', `Rate limit exceeded: ${apiMessage}`, {
+            statusCode: 429,
+          }),
+          retryAfterMs,
+        );
       }
       if (status === 404) {
         throw createAppError('AI_MODEL_NOT_FOUND', `Model not found: ${apiMessage}`, {
@@ -151,9 +189,12 @@ export function createGeminiAIService(options = {}) {
         });
       }
       if (status === 503) {
-        throw createAppError('AI_PROVIDER_OVERLOADED', `AI provider overloaded: ${apiMessage}`, {
-          statusCode: 503,
-        });
+        throw withRetryAfter(
+          createAppError('AI_PROVIDER_OVERLOADED', `AI provider overloaded: ${apiMessage}`, {
+            statusCode: 503,
+          }),
+          retryAfterMs,
+        );
       }
       if (status >= 400 && status < 500) {
         throw createAppError('AI_UNAVAILABLE', `AI client error: ${apiMessage}`, {
@@ -161,9 +202,12 @@ export function createGeminiAIService(options = {}) {
         });
       }
 
-      throw createAppError('AI_PROVIDER_ERROR', `AI provider error: ${apiMessage}`, {
-        statusCode: status,
-      });
+      throw withRetryAfter(
+        createAppError('AI_PROVIDER_ERROR', `AI provider error: ${apiMessage}`, {
+          statusCode: status,
+        }),
+        retryAfterMs,
+      );
     }
 
     const rawText = extractText(payload);
@@ -171,7 +215,6 @@ export function createGeminiAIService(options = {}) {
       throw createAppError('AI_INVALID_RESPONSE', 'AI API response did not include text content');
     }
 
-    // Apply JSON sanitization step
     const cleanedString = cleanJsonResponse(rawText);
 
     let parsed;
@@ -190,47 +233,91 @@ export function createGeminiAIService(options = {}) {
   return {
     async completeJson({ system, user, schemaHint }) {
       const overallStartedAt = Date.now();
-      const attemptOrder = buildAttemptOrder(configuredModel);
+      const keys = getGeminiApiKeys();
+      if (keys.length === 0) {
+        throw createAppError('AI_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
+      }
+
       let lastError;
+      const skippedModels = new Set();
+      let round = 0;
 
-      for (let i = 0; i < attemptOrder.length; i++) {
-        const targetModel = attemptOrder[i];
-        const elapsedMs = Date.now() - overallStartedAt;
-        const remainingBudgetMs = env.aiTotalBudgetMs - elapsedMs;
+      while (Date.now() - overallStartedAt < env.aiTotalBudgetMs) {
+        const attemptOrder = buildAttemptOrder(configuredModel).filter(
+          (model) => !skippedModels.has(model),
+        );
+        const hopTimeoutMs = round === 0 ? getFastHopTimeoutMs() : env.aiTimeoutMs;
 
-        // FIX (Phase 1.0c): total budget is checked BEFORE every attempt,
-        // not just between fallback rounds — a real flash-lite model that's
-        // actually available answers in 1-3s, so if we're already close to
-        // the budget there's no point starting another network round trip
-        // that can't possibly finish in time anyway.
-        if (remainingBudgetMs <= 250) {
-          console.error(
-            `[GeminiAIService] AI total budget of ${env.aiTotalBudgetMs}ms exhausted after ${elapsedMs}ms ` +
-              `(${attemptOrder.length - i} candidate model(s) untried: ${attemptOrder.slice(i).join(', ')}) — giving up.`
-          );
+        for (const targetModel of attemptOrder) {
+          const elapsedMs = Date.now() - overallStartedAt;
+          const remainingBudgetMs = env.aiTotalBudgetMs - elapsedMs;
+          if (remainingBudgetMs <= 400) {
+            console.error(
+              `[GeminiAIService] AI total budget of ${env.aiTotalBudgetMs}ms exhausted after ${elapsedMs}ms ` +
+                `(${attemptOrder.length - attemptOrder.indexOf(targetModel)} candidate model(s) untried) — giving up.`,
+            );
+            break;
+          }
+
+          const attemptTimeoutMs = Math.min(hopTimeoutMs, remainingBudgetMs);
+          const apiKey = getGeminiApiKey();
+
+          try {
+            const result = await executeApiCall(
+              targetModel,
+              system,
+              user,
+              schemaHint,
+              attemptTimeoutMs,
+              apiKey,
+            );
+            recordSuccessfulModel(targetModel);
+            return result;
+          } catch (err) {
+            lastError = err;
+            console.warn(
+              `[GeminiAIService] Model ${targetModel} failed after ${Date.now() - overallStartedAt - elapsedMs}ms: ${err.message}`,
+            );
+
+            if (err.code === 'AI_MODEL_NOT_FOUND' || err.statusCode === 404) {
+              skippedModels.add(targetModel);
+              continue;
+            }
+
+            if (
+              err.code === 'AI_RATE_LIMIT' ||
+              err.code === 'AI_PROVIDER_OVERLOADED' ||
+              err.code === 'AI_TIMEOUT' ||
+              err.statusCode === 429 ||
+              err.statusCode === 503
+            ) {
+              markModelCooldown(targetModel);
+              if (err.code !== 'AI_TIMEOUT') {
+                rotateGeminiApiKey(err.code || `HTTP ${err.statusCode}`);
+              }
+            }
+          }
+        }
+
+        if (!TRANSIENT_CODES.has(lastError?.code)) {
           break;
         }
 
-        // Clamp this attempt's own timeout to whatever budget remains — no
-        // artificial floor here: forcing a minimum timeout higher than the
-        // remaining budget would let a single attempt blow past the total
-        // budget cap this is meant to enforce (caught by testing: with a
-        // tight budget, a floor here let one hung attempt consume the
-        // entire budget and starve every other candidate). The
-        // remainingBudgetMs <= 250 check above already guarantees we never
-        // start an attempt with too little time left to be worthwhile.
-        const attemptTimeoutMs = Math.min(env.aiTimeoutMs, remainingBudgetMs);
+        round += 1;
+        const elapsedMs = Date.now() - overallStartedAt;
+        const remainingBudgetMs = env.aiTotalBudgetMs - elapsedMs;
+        const requestedBackoffMs = lastError?.retryAfterMs || 800 * 2 ** (round - 1);
+        const backoffMs = Math.min(requestedBackoffMs, 4000, Math.max(0, remainingBudgetMs - 2000));
 
-        try {
-          const result = await executeApiCall(targetModel, system, user, schemaHint, attemptTimeoutMs);
-          recordSuccessfulModel(targetModel);
-          return result;
-        } catch (err) {
-          lastError = err;
-          console.warn(
-            `[GeminiAIService] Model ${targetModel} failed after ${Date.now() - overallStartedAt - elapsedMs}ms: ${err.message}`
-          );
+        if (backoffMs < 200 || remainingBudgetMs < 2000) {
+          break;
         }
+
+        console.warn(
+          `[GeminiAIService] Free-tier overload on round ${round}; waiting ${backoffMs}ms then retrying ` +
+            `(${remainingBudgetMs}ms budget left).`,
+        );
+        await sleep(backoffMs);
       }
 
       console.error('[GeminiAIService] All candidate models failed within the AI budget.');

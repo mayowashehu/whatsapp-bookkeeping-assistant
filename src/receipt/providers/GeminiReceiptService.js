@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import env from '../../config/env.js';
 import { createAppError } from '../../utils/createAppError.js';
 import { fetchWithTimeout } from '../../utils/fetchWithTimeout.js';
+import { getGeminiApiKeys, withGeminiTransientRetry } from '../../services/ai/geminiClient.js';
 
 const UNREADABLE_MARKER = 'UNREADABLE';
 
@@ -17,7 +18,7 @@ const UNREADABLE_MARKER = 'UNREADABLE';
 export function createGeminiReceiptService() {
   return {
     async extractReceiptText({ filePath, mimeType, caption }) {
-      if (!env.geminiApiKey) throw createAppError('RECEIPT_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
+      if (getGeminiApiKeys().length === 0) throw createAppError('RECEIPT_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
       if (!filePath || !mimeType) throw createAppError('RECEIPT_INVALID_INPUT', 'filePath and mimeType are required');
 
       const baseMime = String(mimeType).split(';')[0].trim().toLowerCase();
@@ -53,62 +54,72 @@ export function createGeminiReceiptService() {
         'Do not guess an amount you are not reasonably confident about \u2014 a wrong amount is worse than asking the user to type it manually.',
       ].join('\n');
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.geminiModel)}:generateContent`;
-      const body = {
-        contents: [{
-          parts: [
-            { inline_data: { mime_type: baseMime, data: imageBase64 } },
-            { text: promptText },
-          ],
-        }],
-      };
+      return withGeminiTransientRetry(
+        async (apiKey) => {
+          if (!apiKey) throw createAppError('RECEIPT_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
 
-      let response;
-      try {
-        response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.geminiApiKey }, body: JSON.stringify(body) }, env.receiptTimeoutMs);
-      } catch (err) {
-        if (err?.code === 'TIMEOUT') throw createAppError('RECEIPT_TIMEOUT', `Receipt reading timed out after ${env.receiptTimeoutMs}ms`, { cause: err });
-        throw createAppError('RECEIPT_REQUEST_FAILED', `Receipt reading request failed: ${err.message}`, { cause: err });
-      }
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.geminiModel)}:generateContent`;
+          const body = {
+            contents: [{
+              parts: [
+                { inline_data: { mime_type: baseMime, data: imageBase64 } },
+                { text: promptText },
+              ],
+            }],
+          };
 
-      let payload;
-      try {
-        payload = await response.json();
-      } catch (err) {
-        throw createAppError('RECEIPT_INVALID_RESPONSE', `API returned non-JSON (HTTP ${response.status})`, { cause: err });
-      }
+          let response;
+          try {
+            response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) }, env.receiptTimeoutMs);
+          } catch (err) {
+            if (err?.code === 'TIMEOUT') throw createAppError('RECEIPT_TIMEOUT', `Receipt reading timed out after ${env.receiptTimeoutMs}ms`, { cause: err });
+            throw createAppError('RECEIPT_REQUEST_FAILED', `Receipt reading request failed: ${err.message}`, { cause: err });
+          }
 
-      if (!response.ok) {
-        const status = response.status;
-        const apiMessage = payload?.error?.message || response.statusText;
+          let payload;
+          try {
+            payload = await response.json();
+          } catch (err) {
+            throw createAppError('RECEIPT_INVALID_RESPONSE', `API returned non-JSON (HTTP ${response.status})`, { cause: err });
+          }
 
-        if (status === 429) {
-          throw createAppError('AI_RATE_LIMIT', `Receipt reading rate limit exceeded: ${apiMessage}`, { statusCode: 429 });
-        }
-        if (status === 404) {
-          throw createAppError('AI_MODEL_NOT_FOUND', `Receipt reading model not found: ${apiMessage}`, { statusCode: 404 });
-        }
-        if (status === 400) {
-          // Same reasoning as GeminiTranscriptionService's audio case: a
-          // 400 here almost always means the image itself was rejected
-          // (corrupted, empty, or an encoding it can't read), not that the
-          // provider is unavailable.
-          throw createAppError('RECEIPT_BAD_IMAGE', `Receipt reading rejected the image: ${apiMessage}`, { statusCode: 400 });
-        }
-        if (status >= 400 && status < 500) {
-          throw createAppError('AI_UNAVAILABLE', `Receipt reading client error: ${apiMessage}`, { statusCode: status });
-        }
-        throw createAppError('RECEIPT_PROVIDER_ERROR', `Receipt reading provider error: ${apiMessage}`, { statusCode: status });
-      }
+          if (!response.ok) {
+            const status = response.status;
+            const apiMessage = payload?.error?.message || response.statusText;
 
-      const text = payload?.candidates?.[0]?.content?.parts?.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('').trim();
-      if (!text) throw createAppError('RECEIPT_INVALID_RESPONSE', 'Receipt reading API response did not include any text');
+            if (status === 429) {
+              throw createAppError('AI_RATE_LIMIT', `Receipt reading rate limit exceeded: ${apiMessage}`, { statusCode: 429 });
+            }
+            if (status === 503) {
+              throw createAppError('AI_PROVIDER_OVERLOADED', `Receipt reading provider overloaded: ${apiMessage}`, { statusCode: 503 });
+            }
+            if (status === 404) {
+              throw createAppError('AI_MODEL_NOT_FOUND', `Receipt reading model not found: ${apiMessage}`, { statusCode: 404 });
+            }
+            if (status === 400) {
+              // Same reasoning as GeminiTranscriptionService's audio case: a
+              // 400 here almost always means the image itself was rejected
+              // (corrupted, empty, or an encoding it can't read), not that the
+              // provider is unavailable.
+              throw createAppError('RECEIPT_BAD_IMAGE', `Receipt reading rejected the image: ${apiMessage}`, { statusCode: 400 });
+            }
+            if (status >= 400 && status < 500) {
+              throw createAppError('AI_UNAVAILABLE', `Receipt reading client error: ${apiMessage}`, { statusCode: status });
+            }
+            throw createAppError('RECEIPT_PROVIDER_ERROR', `Receipt reading provider error: ${apiMessage}`, { statusCode: status });
+          }
 
-      if (text.toUpperCase() === UNREADABLE_MARKER) {
-        return { text: null, unreadable: true };
-      }
+          const text = payload?.candidates?.[0]?.content?.parts?.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('').trim();
+          if (!text) throw createAppError('RECEIPT_INVALID_RESPONSE', 'Receipt reading API response did not include any text');
 
-      return { text, unreadable: false };
+          if (text.toUpperCase() === UNREADABLE_MARKER) {
+            return { text: null, unreadable: true };
+          }
+
+          return { text, unreadable: false };
+        },
+        { label: 'GeminiReceipt' },
+      );
     },
   };
 }

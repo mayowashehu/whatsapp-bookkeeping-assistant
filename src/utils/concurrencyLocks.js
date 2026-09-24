@@ -9,7 +9,8 @@ const locks = new Map();
 // fallback loop that could run for minutes) is what let a still-running
 // turn's lock get force-stolen out from under it, allowing the next queued
 // message to start processing concurrently with it.
-const LOCK_TTL_MS = env.aiTotalBudgetMs + 30000;
+// Classify + parse can each use the full AI budget sequentially.
+const LOCK_TTL_MS = env.aiTotalBudgetMs * 2 + 30000;
 
 /**
  * Acquires a strict per-sender mutex lock using an atomic promise-chaining queue.

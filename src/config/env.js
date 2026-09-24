@@ -15,6 +15,8 @@ const env = {
   businessName: process.env.BUSINESS_NAME || 'Luxe BNB',
   mongodbUri: process.env.MONGODB_URI || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  // Optional extra keys (comma-separated). Free-tier 429s are often per-key;
+  // GeminiAIService rotates through this pool on overload without billing.
   geminiModel: getGeminiModel(),
   geminiClassifierModel: getGeminiClassifierModel(),
   geminiParserModel: getGeminiParserModel(),
@@ -27,28 +29,16 @@ const env = {
   // (separate from aiTimeoutMs/aiTotalBudgetMs below, which are sized for
   // fast text-only JSON extraction, not a media upload).
   receiptTimeoutMs: Number(process.env.RECEIPT_TIMEOUT_MS) || 60000,
-  // FIX (Phase 1.0c, 🔴 — confirmed live): lowered from 30000. A real
-  // flash/flash-lite model that's actually available answers in 1-3s — if
-  // it hasn't responded within a few seconds, waiting the rest of a 30s
-  // window out never helps, it just holds the user's WhatsApp chat open.
-  // Failing a single attempt fast is what makes trying several curated
-  // fallback candidates (see geminiClient.js) affordable within the total
-  // budget below instead of eating the whole budget on one hung request.
-  aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS) || 4000,
-  // Total wall-clock budget for a single AI call INCLUDING every fallback
-  // model attempt (see GeminiAIService.js's curated, sticky-first attempt
-  // order). FIX (Phase 1.0c, 🔴 — confirmed live): lowered from 90000.
-  // Real testing measured a single message taking 43-45s under the old
-  // dynamic-discovery fallback; with that discovery step removed and a
-  // short curated candidate list in its place, 4-5 fast attempts
-  // comfortably fit inside ~9-10s. If nothing in the curated list answers
-  // within this budget, the caller gets a fast, honest "still busy"
-  // response instead of silence.
-  // Anything holding a per-sender lock for the duration of an AI call
-  // (see concurrencyLocks.js) MUST derive its safety timeout from this
-  // value, not choose an independent number — a mismatch there is exactly
-  // what let a still-in-flight turn's lock get force-released mid-call.
-  aiTotalBudgetMs: Number(process.env.AI_TOTAL_BUDGET_MS) || 9000,
+  // Per-attempt timeout on later retry rounds. Free-tier Gemini often
+  // queues for 6–10s under "high demand"; aborting at 4s was cutting off
+  // requests that would have succeeded. First-pass hops still clamp to 5s
+  // inside GeminiAIService so one hung model cannot eat the whole budget.
+  aiTimeoutMs: Number(process.env.AI_TIMEOUT_MS) || 8000,
+  // Total wall-clock budget for one AI call: model hops + key rotation +
+  // a short backoff retry when every candidate returns 429/503/timeout.
+  // Sized for one human on the free tier, not a paid SLA. Concurrency
+  // locks MUST derive TTL from this (a turn can classify then parse).
+  aiTotalBudgetMs: Number(process.env.AI_TOTAL_BUDGET_MS) || 32000,
   classificationMinConfidence: Number(process.env.CLASSIFICATION_MIN_CONFIDENCE) || 0.7,
   // Phase 6.3 — mirrors classificationMinConfidence's floor, but for the
   // transaction-parsing layer (AiParsingService/TransactionParser), which
