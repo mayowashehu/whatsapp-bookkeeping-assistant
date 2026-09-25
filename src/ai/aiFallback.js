@@ -18,8 +18,18 @@ export function isAiUnavailableError(err) {
   return AI_UNAVAILABLE_CODES.includes(err?.code);
 }
 
+/**
+ * True when a pipeline result is the "Assistant Busy" reply (possibly with a
+ * greeting prefix). Lets callers detect "the AI was unavailable" from the
+ * result alone, regardless of which internal path produced it.
+ */
+export function isAiBusyReply(result) {
+  return typeof result?.replyText === 'string' && result.replyText.includes(AI_BUSY_FALLBACK_MESSAGE);
+}
+
 export default {
   AI_BUSY_FALLBACK_MESSAGE,
+  isAiBusyReply,
   AI_UNAVAILABLE_CODES,
   isAiUnavailableError,
 };

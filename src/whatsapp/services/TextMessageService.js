@@ -7,8 +7,32 @@ import { checkFastPassIntent } from '../../services/textPreFilter.js';
 import { normalizePhoneNumber } from '../../utils/phoneNormalize.js';
 import { isLocked, withSenderLock } from '../../utils/concurrencyLocks.js';
 import { card } from '../../utils/waFormat.js';
+import { isAiBusyReply } from '../../ai/aiFallback.js';
+import {
+  enqueueDeferredMessage,
+  hasPendingDeferred,
+  isDeferredDuplicate,
+  buildDeferredAckReply,
+  buildQueuedBehindReply,
+  buildAlreadySavedReply,
+} from '../../services/deferred/index.js';
 
 const STILL_PROCESSING_REPLY = card('⏳', 'Still Processing', ["I'm still processing your previous message."], 'Please wait a moment.');
+
+/**
+ * Persist a message for automatic retry and return the ack to send the user.
+ * If persisting itself fails, fall back to `fallbackText` (the old
+ * "please resend" behavior) so the user is never left in silence.
+ */
+async function deferMessage({ fromNumber, text, messageId, ackText, fallbackText }) {
+  try {
+    await enqueueDeferredMessage({ senderId: fromNumber, text, sourceMessageId: messageId });
+    return ackText;
+  } catch (err) {
+    logInternalError('TextMessageService', err, { senderId: fromNumber });
+    return fallbackText;
+  }
+}
 
 /**
  * A message that is a complete, decisive turn on its own — "yes", "cancel",
@@ -80,15 +104,47 @@ export async function handleTextMessage(message) {
         if (fastPass.isFastPass) {
           intent = fastPass.intent;
           replyText = fastPass.replyText;
+        } else if (await hasPendingDeferred(fromNumber)) {
+          // Something earlier from this sender is still waiting on an AI retry.
+          // Queue this behind it so messages resolve in the order they were sent
+          // (e.g. "paid 15k diesel" -> "yes" must not run "yes" first).
+          if (await isDeferredDuplicate(fromNumber, concatenatedText)) {
+            // Same message is already saved and waiting: don't create a second copy.
+            intent = 'deferred_duplicate';
+            replyText = buildAlreadySavedReply();
+          } else {
+            intent = 'deferred_queued';
+            replyText = await deferMessage({
+              fromNumber,
+              text: concatenatedText,
+              messageId,
+              ackText: buildQueuedBehindReply(),
+              fallbackText: SAFE_WHATSAPP_FALLBACK_REPLY,
+            });
+          }
         } else {
           const result = await processMessageContent({
             content: concatenatedText,
             fromNumber,
           });
-          replyText = result?.replyText || SAFE_WHATSAPP_FALLBACK_REPLY;
-          intent = result?.classification || intent;
-          if (!result?.replyText) {
-            status = 'fallback_no_result';
+
+          if (isAiBusyReply(result)) {
+            // AI was unavailable even after model fallbacks + backoff. Don't
+            // make the user resend: save it and retry automatically.
+            intent = 'deferred';
+            replyText = await deferMessage({
+              fromNumber,
+              text: concatenatedText,
+              messageId,
+              ackText: buildDeferredAckReply(),
+              fallbackText: result.replyText,
+            });
+          } else {
+            replyText = result?.replyText || SAFE_WHATSAPP_FALLBACK_REPLY;
+            intent = result?.classification || intent;
+            if (!result?.replyText) {
+              status = 'fallback_no_result';
+            }
           }
         }
 

@@ -6,6 +6,7 @@ import { startTempCleanupCron } from './utils/tempCleanup.service.js';
 import dns from "node:dns";
 dns.setServers(["8.8.8.8", "8.8.4.4"]); // Uses Google's public DNS
 import { startDraftReminderDaemon } from './services/draft/DraftReminderService.js';
+import { startDeferredMessageDaemon } from './services/deferred/index.js';
 
 
 /**
@@ -32,6 +33,7 @@ async function start() {
     console.log(`Server listening on port ${env.port} (${env.nodeEnv})`);
     startTempCleanupCron();
     startDraftReminderDaemon();
+    startDeferredMessageDaemon();
   });
 
   let isShuttingDown = false;

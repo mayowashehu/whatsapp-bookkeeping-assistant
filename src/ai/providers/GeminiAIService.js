@@ -233,6 +233,10 @@ export function createGeminiAIService(options = {}) {
   return {
     async completeJson({ system, user, schemaHint }) {
       const overallStartedAt = Date.now();
+      // When a second provider is configured, Gemini gets a shorter leash
+      // (options.budgetMs) so a struggling Gemini hands off instead of holding
+      // the user's chat for the full 32s. Without a fallback, the full budget applies.
+      const budgetMs = options.budgetMs ?? env.aiTotalBudgetMs;
       const keys = getGeminiApiKeys();
       if (keys.length === 0) {
         throw createAppError('AI_CONFIG_ERROR', 'GEMINI_API_KEY is not configured');
@@ -242,7 +246,7 @@ export function createGeminiAIService(options = {}) {
       const skippedModels = new Set();
       let round = 0;
 
-      while (Date.now() - overallStartedAt < env.aiTotalBudgetMs) {
+      while (Date.now() - overallStartedAt < budgetMs) {
         const attemptOrder = buildAttemptOrder(configuredModel).filter(
           (model) => !skippedModels.has(model),
         );
@@ -250,10 +254,10 @@ export function createGeminiAIService(options = {}) {
 
         for (const targetModel of attemptOrder) {
           const elapsedMs = Date.now() - overallStartedAt;
-          const remainingBudgetMs = env.aiTotalBudgetMs - elapsedMs;
+          const remainingBudgetMs = budgetMs - elapsedMs;
           if (remainingBudgetMs <= 400) {
             console.error(
-              `[GeminiAIService] AI total budget of ${env.aiTotalBudgetMs}ms exhausted after ${elapsedMs}ms ` +
+              `[GeminiAIService] AI total budget of ${budgetMs}ms exhausted after ${elapsedMs}ms ` +
                 `(${attemptOrder.length - attemptOrder.indexOf(targetModel)} candidate model(s) untried) — giving up.`,
             );
             break;
@@ -305,7 +309,7 @@ export function createGeminiAIService(options = {}) {
 
         round += 1;
         const elapsedMs = Date.now() - overallStartedAt;
-        const remainingBudgetMs = env.aiTotalBudgetMs - elapsedMs;
+        const remainingBudgetMs = budgetMs - elapsedMs;
         const requestedBackoffMs = lastError?.retryAfterMs || 800 * 2 ** (round - 1);
         const backoffMs = Math.min(requestedBackoffMs, 4000, Math.max(0, remainingBudgetMs - 2000));
 
